@@ -231,28 +231,43 @@ group('capturing the live state');
 {
   // The game state is where the speed, ARE and the line-clear delay live, so
   // capturing has to take the game as well as the handling config.
-  const fakeGame = { startLevel: 6, are: 3, lineClearDelay: 7 };
+  const running = { mode: { id: 'sprint' }, startLevel: 6, are: 3, lineClearDelay: 7 };
   const captured = captureSettings(
     { mode: 'sprint', levels: { marathon: 2 } },
     { das: 2, arr: 0, sdf: 9, dcd: 0 },
-    fakeGame);
+    running);
 
   eq(captured.mode, 'sprint', 'the mode is captured');
   eq(captured.handling.das, 2, 'the handling config is captured');
   eq(captured.timing.are, 3, 'ARE comes from the game state');
   eq(captured.timing.lineClearDelay, 7, 'and so does the line-clear delay');
-  eq(captured.levels.sprint, 6, 'the speed comes from the game state');
+  eq(captured.levels.sprint, 6, 'the speed comes from the game when the mode matches');
   // The reason capture takes the whole settings object rather than just a mode:
   // rebuilding from scratch would reset every *other* mode's speed to its
   // default, so finishing a Sprint run would quietly undo a Marathon tweak.
   eq(captured.levels.marathon, 2, 'and the other modes keep their own speeds');
   eq(captured.levels.ultra, DEFAULT_SETTINGS.levels.ultra, 'while an untouched one stays default');
+}
 
+{
+  // The mismatch case, which is how a Sprint preference got saved at level 1.
+  // When a mode is being switched to, the game is still running the mode being
+  // switched *away* from — and its speed must not be written onto the incoming
+  // one. The panel has already chosen the incoming mode's level.
+  const stale = { mode: { id: 'marathon' }, startLevel: 1, are: 0, lineClearDelay: 0 };
+  const switching = captureSettings({ mode: 'sprint', levels: { sprint: 4 } }, {}, stale);
+  eq(switching.mode, 'sprint', 'the mode is the incoming one');
+  eq(switching.levels.sprint, 4, 'and it keeps the speed the panel chose, not the outgoing one');
+  eq(switching.levels.marathon, DEFAULT_SETTINGS.levels.marathon,
+    'while the outgoing mode keeps its own');
+}
+
+{
   // Capturing an instant SDF and restoring it must not change the feel.
   const instant = captureSettings(
     { mode: 'marathon' },
     { das: 10, arr: 2, sdf: Infinity, dcd: 0 },
-    fakeGame);
+    { mode: { id: 'marathon' }, startLevel: 1, are: 0, lineClearDelay: 0 });
   eq(instant.handling.sdf, null, 'an instant SDF is captured as null');
   eq(settingsToConfig(instant).handling.sdf, Infinity, 'and restored as instant');
 }

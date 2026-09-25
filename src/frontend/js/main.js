@@ -23,7 +23,7 @@
 
 import { TICK_MS } from './constants.js';
 import { makeGame, STATUS, setTiming, setStartLevel } from './game.js';
-import { MODE, MODE_LIST } from './modes.js';
+import { MODE, MODES, MODE_LIST } from './modes.js';
 import { makeHandling, makeInputFrame, resetHandling, setHandling } from './handling.js';
 import { makeInput, attachInput, pollInput, resetInput } from './input.js';
 import { stepWithInput } from './apply.js';
@@ -141,18 +141,33 @@ function applyLive(next) {
 }
 
 /**
- * A setting was committed — the control was released, or a select changed.
+ * A setting was committed — the control was released, a select changed, or a
+ * mode key was pressed.
  *
  * Only here is anything written to disk: a slider drag fires dozens of `input`
  * events and one `change`.
+ *
+ * **The restart decision compares against the running game, not against the
+ * settings.** Comparing the new settings with the old ones looks equivalent and
+ * is not: if the stored mode is already Sprint and the game is somehow running
+ * Marathon, selecting Sprint changes nothing in the settings and the mismatch
+ * survives. That is exactly how "I selected sprint and it kept playing
+ * marathon" happened — the panel saved Sprint correctly while the game went on.
  */
 function commitSettings(next) {
-  const modeChanged = next.mode !== settings.mode;
+  const modeChanged = next.mode !== game.mode.id;
   settings = next;
   applyLive(next);
+  panel.set(settings);
   call('saveSettings', { settings: captureSettings(settings, handling.cfg, game) });
-  // Choosing a mode means playing it, so a mode change starts a run.
-  if (modeChanged) newGame(undefined, settings.mode);
+  // Choosing a mode means playing it.
+  if (modeChanged) newGame(undefined, next.mode);
+}
+
+/** Start a mode, keeping the settings and the game in step. */
+function setMode(modeId) {
+  if (!MODES[modeId]) return;
+  commitSettings(normalizeSettings(Object.assign({}, settings, { mode: modeId })));
 }
 
 async function loadSettings() {
@@ -406,7 +421,10 @@ window.addEventListener('keydown', (e) => {
 
   const pick = MODE_KEYS[e.code];
   if (pick !== undefined && MODE_LIST[pick]) {
-    newGame(undefined, MODE_LIST[pick]);
+    // Through setMode, not newGame: pressing 2 must also update the settings, or
+    // the panel would go on showing the old mode while the game played the new
+    // one — the same mismatch in the other direction.
+    setMode(MODE_LIST[pick]);
     return;
   }
 
@@ -432,7 +450,10 @@ async function maybeBench() {
   // timer, and a suspended timer in an occluded window never resolves — so
   // without this line a stalled bench run produces no output at all, and
   // "the page never loaded" and "the window was hidden" look identical.
-  await call('log', { msg: 'bench: page up, bench flag set' });
+  //
+  // The mode is included because "which mode is actually in play" is a question
+  // the settings cannot answer — that gap is what let a mode mismatch hide.
+  await call('log', { msg: 'bench: page up, mode ' + game.mode.id + ', bench flag set' });
 
   // The pacing half of the self-test needs a *visible* window: WebKit stops rAF
   // when the window is occluded. Bring it to the front, then give it a moment.
@@ -467,8 +488,18 @@ async function maybeBench() {
 }
 
 async function boot() {
-  if (await maybeBench()) return;
+  // Settings first, so the bench runs against the real configuration and the
+  // startup log can report the mode actually in play.
   await loadSettings();
+
+  // The stored mode has to be applied to the *game*, not just to the settings.
+  // The module-scope `newGame()` above ran before the settings were read, so
+  // without this the first run of every session is Marathon whatever was saved —
+  // and selecting the already-saved mode would not fix it, because nothing
+  // compared the game's mode against the settings.
+  newGame(undefined, settings.mode);
+
+  if (await maybeBench()) return;
   requestAnimationFrame(onFrame);
 }
 

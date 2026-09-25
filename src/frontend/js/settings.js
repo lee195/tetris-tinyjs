@@ -141,9 +141,16 @@ export function settingsToConfig(settings) {
  */
 export function captureSettings(settings, handlingCfg, game) {
   const n = normalizeSettings(settings);
+  // Only take the speed from the game when the game is actually running *this*
+  // mode. Capturing it unconditionally writes the outgoing mode's speed onto the
+  // incoming one — which is how a Sprint preference got saved at level 1, the
+  // level of the Marathon game it had just replaced. The panel has already put
+  // the incoming mode's own level in `n.levels`, so leaving it alone is right.
+  const levels = Object.assign({}, n.levels);
+  if (game.mode && game.mode.id === n.mode) levels[n.mode] = game.startLevel;
   return normalizeSettings({
     mode: n.mode,
-    levels: Object.assign({}, n.levels, { [n.mode]: game.startLevel }),
+    levels,
     handling: encodeHandling(handlingCfg),
     timing: { are: game.are, lineClearDelay: game.lineClearDelay },
   });
