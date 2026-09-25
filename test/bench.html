@@ -16,7 +16,12 @@
   (do ES modules load from file:// under the real policy?) is answered
   separately, inside the real app, where siblings and the real CSP both apply.
 
-  Run:  TINYJS_HTML=<abs>/src/frontend/bench.html tinyjs dev
+  Run:  TINYJS_HTML=<abs>/test/bench.html tinyjs dev
+
+  It lives in test/ rather than src/frontend/ because there is no documented way
+  to exclude a file from the build, and src/frontend/ is copied verbatim into the
+  packaged app — so this harness would otherwise ship to players. TINYJS_HTML
+  takes an absolute path from anywhere, so nothing needed it beside the frontend.
 -->
 <title>tinyjs bench</title>
 <style>

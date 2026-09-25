@@ -293,6 +293,71 @@ group('equality');
   ok(!settingsEqual('nonsense', a), 'and unequal to real settings');
 }
 
+/* ------------------------------------------------------------------- audio */
+
+group('the audio settings');
+
+{
+  const d = normalizeSettings(null);
+  eq(d.volume, 80, 'volume defaults to 80');
+  eq(d.muted, false, 'and sound starts unmuted');
+  eq(typeof d.volume, 'number', 'volume is a number');
+
+  eq(normalizeSettings({ volume: 999 }).volume, LIMITS.volume.max, 'a huge volume clamps');
+  eq(normalizeSettings({ volume: -5 }).volume, 0, 'and a negative one clamps to silence');
+  eq(normalizeSettings({ volume: 'loud' }).volume, d.volume, 'junk falls back to the default');
+  // Deliberately not snapped to the slider's step. `clamp` rounds to a whole
+  // number and stops there: the slider snaps while it is being dragged, but a
+  // hand-edited file may hold anything in range, and 37% is a fine volume.
+  eq(normalizeSettings({ volume: 37 }).volume, 37, 'an off-step volume is kept as written');
+  eq(normalizeSettings({ volume: 37.6 }).volume, 38, 'while a fraction rounds to a whole number');
+
+  // Strictly boolean. A hand-edited settings file has to be able to turn sound
+  // *off* — if any truthy value meant muted, `"muted": "no"` would mute the game
+  // with no way to undo it by editing.
+  eq(normalizeSettings({ muted: true }).muted, true, 'muted true survives');
+  eq(normalizeSettings({ muted: 'no' }).muted, false, 'a truthy string is not muted');
+  eq(normalizeSettings({ muted: 1 }).muted, false, 'and neither is a number');
+  eq(normalizeSettings({ muted: null }).muted, false, 'nor null');
+
+  const original = normalizeSettings({ volume: 45, muted: true, mode: 'ultra' });
+  const restored = normalizeSettings(JSON.parse(JSON.stringify(original)));
+  eq(restored.volume, 45, 'volume survives a JSON round trip');
+  eq(restored.muted, true, 'and so does mute');
+  ok(settingsEqual(original, restored), 'and the pair compares equal');
+}
+
+{
+  // The architectural line: `settingsToConfig` produces what the SIMULATION
+  // needs, and the simulation must not know that sound exists. If volume leaked
+  // in there it would become part of the replay config — and a replay would stop
+  // verifying because someone moved a volume slider.
+  const cfg = settingsToConfig({ volume: 10, muted: true, handling: { das: 4 } });
+  eq(cfg.volume, undefined, 'the simulation config carries no volume');
+  eq(cfg.muted, undefined, 'and no mute flag');
+  eq(cfg.handling.das, 4, 'while carrying everything the simulation does need');
+
+  // And the replay config is built from that, so it cannot pick the audio up.
+  const keys = Object.keys(cfg).sort().join(',');
+  eq(keys, 'handling,mode,startLevel,timing', 'the config keys are exactly the simulation\'s');
+}
+
+{
+  // Capturing the live state must carry the audio settings through, or muting
+  // would be undone by the next commit.
+  const captured = captureSettings(
+    { mode: 'marathon', volume: 25, muted: true },
+    { das: 10, arr: 2, sdf: Infinity, dcd: 0 },
+    { mode: { id: 'marathon' }, startLevel: 1, are: 0, lineClearDelay: 0 });
+  eq(captured.volume, 25, 'capture keeps the volume');
+  eq(captured.muted, true, 'and the mute');
+
+  ok(!settingsEqual(normalizeSettings({ volume: 10 }), normalizeSettings({ volume: 20 })),
+    'a different volume is not equal');
+  ok(!settingsEqual(normalizeSettings({ muted: true }), normalizeSettings({ muted: false })),
+    'and neither is a different mute state');
+}
+
 /* --------------------------------------------------------------- summary */
 
 done('settings');

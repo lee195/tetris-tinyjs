@@ -17,6 +17,7 @@
 
 import { LIMITS, normalizeSettings } from './settings.js';
 import { MODE_LIST, MODES } from './modes.js';
+import { el } from './dom.js';
 
 /**
  * The sliders, in display order. `path` is where the value lives in the settings
@@ -50,12 +51,20 @@ const CONTROLS = [
   },
 ];
 
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
+/**
+ * Audio, in its own list rather than in CONTROLS.
+ *
+ * These are not handling: they do not change how the game plays, only how it
+ * sounds. Keeping them separate is what lets `settingsToConfig` stay free of
+ * them, so a volume slider can never become part of a replay.
+ */
+const AUDIO = [
+  {
+    path: ['volume'],
+    label: 'Volume',
+    hint: 'percent — 0 is silence without losing the level',
+  },
+];
 
 function get(obj, path) {
   return path.reduce((o, k) => (o ? o[k] : undefined), obj);
@@ -125,7 +134,14 @@ export function makePanel(root, handlers) {
 
   /* -- sliders -- */
 
-  for (const c of CONTROLS) {
+  /**
+   * One slider row, built from data.
+   *
+   * Factored out of the loop below so the audio section can use it too. The
+   * file's own claim is that adding a setting is a line of data — and that only
+   * holds if every section shares the machinery rather than growing its own copy.
+   */
+  function addSlider(c) {
     const range = LIMITS[c.path[c.path.length - 1]];
     const row = el('div', 'set-row');
     row.appendChild(el('label', 'set-label', c.label));
@@ -144,8 +160,7 @@ export function makePanel(root, handlers) {
     row.appendChild(el('p', 'set-hint', c.hint));
     root.appendChild(row);
 
-    const entry = { c, input, out };
-    rows.push(entry);
+    rows.push({ c, input, out });
 
     input.addEventListener('input', () => {
       current = readInto(current);
@@ -157,6 +172,8 @@ export function makePanel(root, handlers) {
       onCommit(current);
     });
   }
+
+  for (const c of CONTROLS) addSlider(c);
 
   /* -- soft drop, which is the one control with a non-numeric option -- */
 
@@ -194,6 +211,25 @@ export function makePanel(root, handlers) {
     onCommit(current);
   });
   instant.addEventListener('change', () => {
+    current = readInto(current);
+    onCommit(current);
+  });
+
+  /* -- audio -- */
+
+  for (const c of AUDIO) addSlider(c);
+
+  const muteRow = el('div', 'set-row set-inline');
+  const mute = document.createElement('input');
+  mute.type = 'checkbox';
+  mute.id = 'set-muted';
+  const muteLabel = el('label', 'set-check', 'Mute all sound');
+  muteLabel.htmlFor = mute.id;
+  muteRow.appendChild(mute);
+  muteRow.appendChild(muteLabel);
+  root.appendChild(muteRow);
+
+  mute.addEventListener('change', () => {
     current = readInto(current);
     onCommit(current);
   });
@@ -240,6 +276,7 @@ export function makePanel(root, handlers) {
     target.mode = modeSelect.value;
     target.levels[modeSelect.value] = Number(levelRange.value);
     target.handling.sdf = instant.checked ? null : Number(sdfRange.value);
+    target.muted = mute.checked;
     return normalizeSettings(target);
   }
 
@@ -256,6 +293,7 @@ export function makePanel(root, handlers) {
     sdfRange.disabled = isInstant;
     sdfRange.value = String(isInstant ? LIMITS.sdf.max : current.handling.sdf);
     sdfOut.textContent = isInstant ? 'instant' : String(current.handling.sdf);
+    mute.checked = current.muted;
     modeSelect.value = current.mode;
     levelRange.value = String(current.levels[current.mode]);
     levelOut.textContent = levelRange.value;

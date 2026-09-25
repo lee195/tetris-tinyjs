@@ -37,6 +37,10 @@ import {
 import { normalizeSettings, settingsToConfig, captureSettings } from './settings.js';
 import { makePanel } from './panel.js';
 import { runSelfTest } from './selftest.js';
+import { renderAll } from './sfxgen.js';
+import { pick, makeSfx, makeSfxState, resetSfxState } from './sfx.js';
+import { makeMenu } from './menu.js';
+import { buildItems, keyToAction } from './menuModel.js';
 
 /** How long a "TETRIS" / "T-SPIN DOUBLE" callout stays on screen, in ticks. */
 const BANNER_TICKS = 66;
@@ -55,6 +59,15 @@ const flags = { paused: false, over: false, banner: '', watching: false, ghost: 
 
 /** The live run. */
 let game;
+/**
+ * Which screen is up: `'title'` or `'playing'`.
+ *
+ * A driver-owned screen rather than a question asked of the overlays. Asking
+ * `menu.isOpen()` looks equivalent and is not: the settings panel can be opened
+ * *from* the title screen, so closing it would leave no overlay up and the game
+ * would begin ticking with no mode ever chosen.
+ */
+let screen = 'title';
 /** A playback being watched, or null. Takes over the display while set. */
 let watch = null;
 /** A playback raced alongside the live run, or null. */
@@ -103,6 +116,19 @@ const panel = makePanel(document.getElementById('settings'), {
   onClose: () => { /* the loop reads panel.isOpen() directly */ },
 });
 
+/**
+ * The title screen.
+ *
+ * `onClose` is Escape, and it starts the stored mode: a quick play for someone
+ * who already knows what they want, and the reason no key on this screen does
+ * nothing at all.
+ */
+const menu = makeMenu(document.getElementById('menu'), {
+  onPlay: (modeId) => startMode(modeId),
+  onSettings: () => { resetInput(input); panel.open(); },
+  onClose: () => startMode(settings.mode),
+});
+
 /* ------------------------------------------------------------------ bridge */
 
 function hasBridge() {
@@ -127,6 +153,45 @@ async function call(method, params) {
   }
 }
 
+/* ------------------------------------------------------------------- sound */
+
+/**
+ * base64 for a byte array, in chunks.
+ *
+ * `String.fromCharCode.apply(null, bytes)` on the whole bank overflows the
+ * argument limit and throws — and the bank is tens of kilobytes, so it would
+ * throw every time. The chunk is the usual 0x8000, comfortably under the limit.
+ */
+function toB64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+/**
+ * The sampler, wired to the bridge.
+ *
+ * Every call goes through `call()` rather than `tiny.audio.sampler` directly.
+ * The page-side client destructures what the bridge returns, so a denied or
+ * failed call rejects — and a rejection raised inside the tick loop is an
+ * unhandled rejection once per frame. `call()` reports and returns null instead,
+ * which is what the adapter's error path expects.
+ */
+const sfx = makeSfx({
+  load: (entries) => call('loadSfx', {
+    entries: entries.map((e) => ({ name: e.name, bytesB64: toB64(e.bytes) })),
+  }),
+  play: (name, opts) => call('sampler.play', { name, vol: opts.vol, rate: opts.rate }),
+  master: (value) => call('sampler.master', { value }),
+  stopAll: () => call('sampler.stopAll', {}),
+  onError: report,
+});
+
+/** Per-tick scratch for the sound decisions — see `pick`. */
+const sfxState = makeSfxState();
+
 /* ------------------------------------------------------------------ settings */
 
 /** Apply settings to the running game, without touching the seed or the board. */
@@ -138,6 +203,13 @@ function applyLive(next) {
   // runs before the new game starts, and that game sets its own level — applying
   // the new mode's speed to the old mode's board would be a jolt for no reason.
   if (game.mode.id === cfg.mode) setStartLevel(game, cfg.startLevel);
+
+  // Audio is applied here and deliberately is NOT part of `settingsToConfig`.
+  // That function produces what the *simulation* needs, and the simulation must
+  // not know that sound exists — otherwise volume would become part of the
+  // replay config.
+  sfx.setVolume(next.volume);
+  sfx.setMuted(next.muted);
 }
 
 /**
@@ -154,20 +226,43 @@ function applyLive(next) {
  * survives. That is exactly how "I selected sprint and it kept playing
  * marathon" happened — the panel saved Sprint correctly while the game went on.
  */
-function commitSettings(next) {
+function commitSettings(next, forceRestart) {
   const modeChanged = next.mode !== game.mode.id;
   settings = next;
   applyLive(next);
   panel.set(settings);
   call('saveSettings', { settings: captureSettings(settings, handling.cfg, game) });
   // Choosing a mode means playing it.
-  if (modeChanged) newGame(undefined, next.mode);
+  if (modeChanged || forceRestart) newGame(undefined, next.mode);
 }
 
-/** Start a mode, keeping the settings and the game in step. */
-function setMode(modeId) {
+/**
+ * Choose a mode and play it.
+ *
+ * Always a fresh run, even when the mode did not change. From the title screen
+ * the stored mode is usually the one being chosen, and `commitSettings` restarts
+ * only on a *change* — so without the force flag, Enter on the mode that is
+ * already saved would look like it did nothing at all.
+ */
+function startMode(modeId) {
   if (!MODES[modeId]) return;
-  commitSettings(normalizeSettings(Object.assign({}, settings, { mode: modeId })));
+  screen = 'playing';
+  menu.close();
+  commitSettings(normalizeSettings(Object.assign({}, settings, { mode: modeId })), true);
+}
+
+/**
+ * Show the title screen.
+ *
+ * The scores come from the table the driver already holds rather than a fresh
+ * fetch: `persistRun` replaces it after every run, so it is current.
+ */
+function showTitle() {
+  screen = 'title';
+  watch = null;
+  ghost = null;
+  menu.set(buildItems(), scoreTable);
+  menu.open();
 }
 
 async function loadSettings() {
@@ -199,6 +294,13 @@ function newGame(seed, nextMode) {
   setHandling(handling, cfg.handling);
   resetLoop(loop);
   resetPerf(perf);
+  // A key pressed just before a restart must not fire into the new game. Space
+  // is a hard drop, and its edge latch survives any stretch of frames where
+  // nothing ticks — which is exactly what the title screen and the end-of-run
+  // overlay are. Without this, pressing Space to start a game hard-drops the
+  // first piece the moment it spawns.
+  resetInput(input);
+  resetSfxState(sfxState);
   recorder = makeRecorder();
   runRecorded = false;
   watch = null;
@@ -208,9 +310,15 @@ function newGame(seed, nextMode) {
   bannerUntil = 0;
 }
 
-/** Focus loss pauses. The input adapter has already cleared the held keys. */
+/**
+ * Whether the simulation should hold still.
+ *
+ * Focus loss, the title screen and the settings panel each stop the clock for a
+ * different reason. `flags.paused` below is deliberately narrower, because only
+ * one of the three is the canvas's to announce.
+ */
 function isPaused() {
-  return input.paused === true || panel.isOpen();
+  return input.paused === true || screen === 'title' || panel.isOpen();
 }
 
 /* ---------------------------------------------------------------- replays */
@@ -313,13 +421,21 @@ function onFrame(now) {
     if (ticks > 0 && watch) {
       for (let i = 0; i < ticks && !watch.done; i++) {
         if (!playbackStep(watch)) watch.done = true;
+        // A replay is a game being played, so it sounds like one. The ghost is
+        // deliberately silent: it advances alongside the live game, so two
+        // sounds per event would be noise rather than information.
+        sfx.fire(pick(sfxState, watch.game, null));
       }
     } else if (ticks > 0) {
       pollInput(input, frame);
       for (let i = 0; i < ticks; i++) {
         // Before the tick consumes the edges — see the note at the top.
         if (!runRecorded) recordTick(recorder, frame);
-        stepWithInput(game, handling, frame);
+        // The intent carries what the tick actually applied, which is what the
+        // sound decisions read — see the note on the outcome fields in
+        // `makeIntent`.
+        const it = stepWithInput(game, handling, frame);
+        sfx.fire(pick(sfxState, game, it));
         if (ghost && !ghost.done && !playbackStep(ghost)) ghost.done = true;
         if (game.status === STATUS.OVER) break;
       }
@@ -343,7 +459,11 @@ function onFrame(now) {
 
   flags.over = shown.status === STATUS.OVER;
   flags.banner = shown.ticks < bannerUntil ? banner : '';
-  flags.paused = isPaused();
+  // Narrower than `isPaused`, on purpose: this is only the pause the *canvas*
+  // owns. The title screen and the settings panel announce themselves in the DOM,
+  // so painting PAUSED behind them would have the canvas asserting something
+  // already said — and it would show through wherever the overlay is not opaque.
+  flags.paused = input.paused === true;
   flags.watching = !!watch;
   flags.ghost = !!ghost;
   flags.priorBest = priorBest;
@@ -404,13 +524,42 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  // The menu claims keys the way the panel does, and the reason is sharper than
+  // consistency: with the menu up nothing ticks, so `pollInput` never runs and
+  // every edge latch survives the whole time it is open. Without this, `R` would
+  // silently restart a run behind the title screen, the number keys would change
+  // and persist the mode the title screen is displaying, and `P` would draw the
+  // perf overlay across the menu.
+  if (menu.isOpen()) {
+    const action = keyToAction(e.code);
+    if (action) { menu.act(action); return; }
+    // Settings and the number keys still work from the title screen; everything
+    // else belongs to the menu.
+    if (e.code === 'KeyO') { resetInput(input); panel.open(); return; }
+    const quick = MODE_KEYS[e.code];
+    if (quick !== undefined && MODE_LIST[quick]) startMode(MODE_LIST[quick]);
+    return;
+  }
+
   if (e.code === 'KeyO') {
     // Clear held keys before pausing, so nothing is still down on resume.
     resetInput(input);
     panel.open();
     return;
   }
-  if (e.code === 'Escape') { watch = null; return; }
+  if (e.code === 'KeyM') {
+    // Through commitSettings, so the choice is persisted. A mute that forgets
+    // itself on every launch is worse than no mute at all.
+    commitSettings(normalizeSettings(Object.assign({}, settings, { muted: !settings.muted })));
+    return;
+  }
+  if (e.code === 'Escape') {
+    // Leaving a replay takes precedence: Escape is how playback is stopped, and
+    // that is what you mean before you mean "back to the title screen".
+    if (watch) { watch = null; return; }
+    showTitle();
+    return;
+  }
   if (e.code === 'KeyV') {
     if (watch) watch = null;
     else watchReplay(lastReplay);
@@ -421,10 +570,10 @@ window.addEventListener('keydown', (e) => {
 
   const pick = MODE_KEYS[e.code];
   if (pick !== undefined && MODE_LIST[pick]) {
-    // Through setMode, not newGame: pressing 2 must also update the settings, or
-    // the panel would go on showing the old mode while the game played the new
+    // Through startMode, not newGame: pressing 2 must also update the settings,
+    // or the panel would go on showing the old mode while the game played the new
     // one — the same mismatch in the other direction.
-    setMode(MODE_LIST[pick]);
+    startMode(MODE_LIST[pick]);
     return;
   }
 
@@ -435,6 +584,10 @@ window.addEventListener('keydown', (e) => {
 
 /* --------------------------------------------------------------------- boot */
 
+// A game has to exist before anything else can run: `loadSettings` applies the
+// stored settings to the running game, so it dereferences `game.mode` before
+// `boot` has picked a mode. This is that placeholder — the run the player
+// actually plays starts when they choose a mode on the title screen.
 newGame();
 
 /**
@@ -479,6 +632,14 @@ async function maybeBench() {
       perf,
       call,
       log: (m) => call('log', { msg: m }),
+      // The bench loads the bank itself rather than inspecting a load the driver
+      // started: it needs to await the load to assert on it, and racing the
+      // driver's own fire-and-forget load would make the result a coin toss.
+      sfx,
+      gen: renderAll,
+      // The real menu instance, so the bench checks the element and the class the
+      // stylesheet actually keys off rather than a stand-in built for the test.
+      menu,
     });
   } catch (err) {
     await call('log', { msg: 'bench: self-test threw: ' + (err && err.message ? err.message : err) });
@@ -499,7 +660,26 @@ async function boot() {
   // compared the game's mode against the settings.
   newGame(undefined, settings.mode);
 
+  // The bench loads the bank itself, so it can await the load and assert on the
+  // result — loading here first would make that a race.
   if (await maybeBench()) return;
+
+  // The sound bank, generated here and loaded once.
+  //
+  // Deliberately NOT awaited. On macOS and Windows the mixer is Web Audio inside
+  // *this page*, and the backend waits up to fifteen seconds for the page to
+  // answer each load before giving up — so awaiting this would freeze the window,
+  // with no frames drawn, for however long that took. The game starts first and
+  // the sound joins it a moment later. `loadBank` reports its own failures and
+  // never rejects, but the catch is here so a future change cannot turn boot into
+  // an unhandled rejection.
+  sfx.loadBank(renderAll()).catch(() => {});
+
+  // The title screen, not a run. Nothing ticks while it is up, so the placeholder
+  // game created at module scope is never stepped — it exists only so that `draw`
+  // and `applyLive` have something to read.
+  showTitle();
+
   requestAnimationFrame(onFrame);
 }
 

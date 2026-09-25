@@ -8,11 +8,19 @@
      and is unaffected by this policy — only relax connect-src if the page
      itself ever needs to fetch directly.
 
-     Phase 3 needed no relaxation of this policy. ES modules do load from
-     file:// under script-src 'self' (measured in Phase 0), which is why
-     js/main.js can be a plain <script type="module"> with sibling imports and
-     no bundler. Note `media-src` is still absent, so audio stays blocked until
-     it is deliberately added. -->
+     Phase 3 needed no relaxation of this policy, and neither did Phase 5's
+     sound. ES modules do load from file:// under script-src 'self' (measured in
+     Phase 0), which is why js/main.js can be a plain <script type="module"> with
+     sibling imports and no bundler.
+
+     `media-src` is still absent, and that is now a deliberate choice rather than
+     an open question. It blocks <audio> and <video>, which is only music's
+     problem: sound effects go through tiny.audio.sampler, which on macOS and
+     Windows is Web Audio inside this page decoding a buffer it was handed. It
+     fetches nothing, so no directive governs it. The bench loads the whole bank
+     and plays a voice to prove that rather than assume it. The note that used to
+     stand here said audio was blocked until media-src was added — it was wrong,
+     and believing it would have meant relaxing a policy for no reason. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>__NAME__</title>
 <link rel="stylesheet" href="style.css">
@@ -21,9 +29,13 @@
 <!-- One canvas, not two: the well and the side panel share it, so there is one
      backing store to keep in sync with devicePixelRatio rather than two. -->
 <canvas id="game"></canvas>
-<!-- The settings overlay is the only DOM beyond the canvas. It is built by
-     js/panel.js and hidden until opened; see the note there on why the game
-     pauses while it is up. -->
+<!-- Two overlays beyond the canvas, both built in JS and hidden until opened.
+     They use `display: none` rather than the `hidden` attribute so that a closed
+     overlay cannot swallow a game key — see the note in js/panel.js.
+
+     The title screen is what the app opens on, and nothing ticks behind it, so
+     js/menu.js is where a run begins. -->
+<div id="menu" class="menu" role="dialog" aria-label="Main menu"></div>
 <div id="settings" class="set-panel" role="dialog" aria-label="Settings"></div>
 <script type="module" src="js/main.js"></script>
 </body>

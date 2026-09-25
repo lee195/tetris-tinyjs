@@ -38,6 +38,18 @@ const MAX_REPLAY_BYTES = 4 * 1024 * 1024;
 const MAX_SCORES_PER_MODE = 25;
 
 /**
+ * Sound-bank limits.
+ *
+ * The effect names are not listed here on purpose. A second copy of the list
+ * would be a source of truth that drifts from `sfxgen.js` silently — the frontend
+ * is where the names live, and what actually has to hold here is that a name is
+ * safe to use as a cache filename component and that the payload is bounded.
+ */
+const SFX_NAME = /^[a-z][a-z0-9]{0,15}$/;
+const MAX_SFX_ENTRIES = 16;
+const MAX_SFX_BYTES = 256 * 1024;
+
+/**
  * The mode the bench writes probe entries under.
  *
  * Exercising `saveScore` means writing a real entry, and a real player's score
@@ -60,6 +72,29 @@ function validId(id) {
 
 function isFiniteNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+/** base64 to bytes. `atob` exists in this runtime; the framework decodes the same way. */
+function b64ToU8(str) {
+  const bin = atob(str);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+/**
+ * Does this look like a WAV?
+ *
+ * Worth checking rather than trusting the decode. A payload that is not audio is
+ * accepted by the sampler and then plays as *silence*, reporting nothing
+ * anywhere — which is the failure this project keeps meeting, a container whose
+ * header disagrees with its contents. Rejecting it here is far cheaper than
+ * debugging a game that has quietly stopped making noise.
+ */
+function looksLikeWav(bytes) {
+  return bytes.length >= 12
+    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46   // RIFF
+    && bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45; // WAVE
 }
 
 /** A score entry, reduced to the fields worth keeping. Null when unusable. */
@@ -259,6 +294,69 @@ export const api = {
     if (!Array.isArray(index)) index = [];
     await writeJson(join(dataDir(app), REPLAY_INDEX), index.filter((m) => m.id !== id));
     return true;
+  },
+
+  /* -- sound -- */
+
+  /**
+   * Load the sound bank.
+   *
+   * The page *generates* the effects — see `sfxgen.js`; there is no path to an
+   * asset directory that survives the build, so the sounds are code — and sends
+   * the bytes. This hands them to the mixer, which spills them to the app cache
+   * and decodes them from there.
+   *
+   * The page deliberately cannot do this itself. The wire form of `sampler.load`
+   * also accepts a *path*, so granting it would let the page name any file on
+   * disk for the sampler to read. A method that only accepts bytes the page
+   * already holds is strictly weaker, and it is the only thing the page needs.
+   *
+   * Stops at the first failure rather than trying the rest: if one effect will
+   * not load, the cause is almost certainly systemic — no host, no decoder — and
+   * every remaining load would spend the same fifteen-second timeout proving it
+   * again. Returns `{ loaded, total, failed }` so the page can name what broke.
+   *
+   * **Two gate entries are required beyond the obvious ones, and no documentation
+   * says so.** `sampler.bytes` and `sampler.hostResult` are the Web Audio host's
+   * *own* calls — on macOS and Windows that host lives inside the page, so its
+   * internal traffic is gated like any other page call. Leave them out and every
+   * load fails with "no answer from the main window" after a fifteen-second wait,
+   * which reads like a broken sampler rather than a missing policy entry. The
+   * bench found this the first time it ran; nothing in the framework's own notes
+   * mentions it.
+   */
+  async loadSfx({ entries }, app) {
+    if (!Array.isArray(entries)) throw new Error('loadSfx: entries must be an array');
+    if (entries.length > MAX_SFX_ENTRIES) throw new Error('loadSfx: too many entries');
+
+    let loaded = 0;
+    let failed = null;
+    for (const e of entries) {
+      const name = e && typeof e.name === 'string' ? e.name : '';
+      if (!SFX_NAME.test(name)) { failed = name || '(unnamed)'; break; }
+
+      let bytes;
+      try {
+        bytes = b64ToU8(typeof e.bytesB64 === 'string' ? e.bytesB64 : '');
+      } catch (err) {
+        failed = name + ' (bad base64)';
+        break;
+      }
+      if (!bytes.length || bytes.length > MAX_SFX_BYTES || !looksLikeWav(bytes)) {
+        failed = name + ' (not a usable wav)';
+        break;
+      }
+
+      try {
+        await app.audio.sampler.load(name, bytes);
+      } catch (err) {
+        failed = name + ' (' + (err && err.message ? err.message : String(err)) + ')';
+        break;
+      }
+      loaded++;
+    }
+
+    return { loaded, total: entries.length, failed };
   },
 };
 

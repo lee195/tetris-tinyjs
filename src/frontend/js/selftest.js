@@ -29,7 +29,7 @@ import { COLS, TOTAL_ROWS, VISIBLE_TOP, PIECE } from './constants.js';
 import { setCell } from './board.js';
 import { SHAPES } from './pieces.js';
 import { makeGame, step, ghostRow, STATUS } from './game.js';
-import { MODE } from './modes.js';
+import { MODE, MODE_LIST } from './modes.js';
 import { makeHandling, makeInputFrame } from './handling.js';
 import { stepWithInput } from './apply.js';
 import { makeLoop, advance } from './loop.js';
@@ -37,6 +37,7 @@ import { draw, boardCellX, boardCellY, BASE } from './render.js';
 import { makePerf, recordFrame, stats, resetPerf, meetsBudget } from './perf.js';
 import { makeRecorder, recordTick, finishRecording, buildReplay } from './replay.js';
 import { normalizeSettings } from './settings.js';
+import { SFX_NAMES } from './sfxgen.js';
 
 const WELL_BG = [0x11, 0x14, 0x19];
 const PAGE_BG = [0x0b, 0x0d, 0x11];
@@ -206,7 +207,15 @@ function checkRender(deps, report) {
   const img3 = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const stackX = boardCellX(L, 7);
   const stackY = boardCellY(L, TOTAL_ROWS - 1);
-  const edge = at(img3, stackX + 0.5, stackY + L.cell / 2, dpr);
+  // Sample the stroke's own pixel column, and deliberately not "half a pixel in".
+  //
+  // `drawStack` strokes at `boardCellX + 0.5` with a 1px line, so the outline
+  // covers the single pixel column starting at `stackX` — and `at()` rounds its
+  // argument, so `stackX + 0.5` reads pixel `stackX + 1`, one column inside the
+  // cell, where there is nothing but background. That off-by-one is why this
+  // check was red long before any of the sound work; the renderer was drawing the
+  // outline correctly the whole time, and the failure was in the assertion.
+  const edge = at(img3, stackX, stackY + L.cell / 2, dpr);
   const centre = at(img3, stackX + L.cell / 2, stackY + L.cell / 2, dpr);
 
   report.check('the ghost run is outlined under the live board',
@@ -388,12 +397,100 @@ async function checkStorage(deps, report) {
 
 /* --------------------------------------------------------------------- entry */
 
+/**
+ * Load the sound bank through the real bridge, and play something.
+ *
+ * This is the check that answers the question the plan could not. The CSP has no
+ * `media-src`, which blocks `<audio>` — and the sampler is *not* `<audio>`. On
+ * macOS and Windows it is Web Audio inside this very page, and Web Audio playing
+ * an already-decoded buffer fetches nothing, so no directive governs it. That
+ * reasoning is sound, and reasoning is exactly what this project has learned not
+ * to trust: the frame-rate claim was "verified" the same way and turned out to
+ * be wrong. So the assumption gets measured, in the real webview, under the real
+ * policy, through the real gate.
+ *
+ * The play call is awaited here, unlike in the frame loop. The bench can afford
+ * to wait, and a *resolved* call is the thing worth asserting: it proves the
+ * gate entry, the bridge and the mixer all agree. In the loop the same call is
+ * fire-and-forget, because a sound that blocks a frame is worse than one that is
+ * late.
+ */
+async function checkAudio(deps, report) {
+  const entries = deps.gen();
+  report.check('the bank renders ' + entries.length + ' effects',
+    entries.length === SFX_NAMES.length,
+    entries.length === SFX_NAMES.length ? '' :
+      'expected ' + SFX_NAMES.length);
+
+  const ready = await deps.sfx.loadBank(entries);
+  report.check('the sampler decodes the whole bank', ready,
+    ready ? '' : 'loadSfx refused one of them — see the log above');
+
+  if (ready) {
+    const played = await deps.call('sampler.play', { name: 'ui', vol: 0.25, rate: 1 });
+    report.check('sampler.play is allowed and the mixer takes it',
+      played !== null && played !== undefined,
+      played ? 'voice ' + played.id : 'refused — check the api gate');
+
+    // A second one, louder and longer, so a human in the room hears the check
+    // pass rather than having to trust the log.
+    await deps.call('sampler.play', { name: 'clear', vol: 0.6, rate: 1 });
+  }
+  return ready;
+}
+
+/**
+ * The title screen, checked as DOM rather than as pixels.
+ *
+ * The bench cannot read pixels for a DOM overlay — it is not on the canvas — so
+ * this checks the two things that would otherwise need a human and that would
+ * fail *silently*:
+ *
+ *  1. **The class the adapter toggles is the one the stylesheet keys off.** A
+ *     typo on either side of that agreement produces an invisible menu, no error
+ *     anywhere, and a game that appears to boot straight into a run. Comparing
+ *     the *computed* style is what makes this a real check rather than a
+ *     tautology about a string.
+ *  2. That the rows are actually built, one per mode.
+ *
+ * Driven through the real menu instance, but only its harmless verbs — opening,
+ * moving the highlight, closing. Choosing a row would start a game in the middle
+ * of the bench.
+ */
+function checkMenu(deps, report) {
+  const root = document.getElementById('menu');
+  report.check('the menu element is in the document', !!root);
+  if (!root) return;
+
+  deps.menu.set();
+  deps.menu.open();
+
+  const rows = root.querySelectorAll('.menu-item');
+  report.check('the menu builds a row per mode, plus Settings',
+    rows.length === MODE_LIST.length + 1,
+    rows.length + ' rows, expected ' + (MODE_LIST.length + 1));
+
+  const openDisplay = getComputedStyle(root).display;
+  report.check('an open menu is actually displayed', openDisplay !== 'none',
+    'display: ' + openDisplay);
+
+  const before = deps.menu.selection();
+  deps.menu.act('down');
+  report.check('the highlight moves', deps.menu.selection() !== before,
+    before + ' -> ' + deps.menu.selection());
+
+  deps.menu.close();
+  const shutDisplay = getComputedStyle(root).display;
+  report.check('and a closed menu takes no space and no keys',
+    shutDisplay === 'none', 'display: ' + shutDisplay);
+}
+
 export async function runSelfTest(deps) {
   // Fail loudly on a missing dependency. Without this, a forgotten argument
   // surfaces as "undefined is not an object" thrown from inside a rAF callback,
   // which kills the frame loop — and that looks exactly like an occluded window,
   // so the wrong diagnosis is the easy one to reach.
-  for (const key of ['canvas', 'renderer', 'perf', 'log', 'call']) {
+  for (const key of ['canvas', 'renderer', 'perf', 'log', 'call', 'sfx', 'gen', 'menu']) {
     if (!deps[key]) throw new Error('selftest: deps.' + key + ' is missing');
   }
 
@@ -406,6 +503,18 @@ export async function runSelfTest(deps) {
     lines.push((pass ? '  ok   ' : '  FAIL ') + name + (detail ? '  [' + detail + ']' : ''));
     if (!pass) failures.push(name);
   };
+
+  // Audio first. It is fast, and it is the newest and least-proven thing here —
+  // if the sampler cannot start, that is the most interesting failure in the run.
+  log('bench: sound bank');
+  await checkAudio(deps, report);
+  for (const l of lines) log(l);
+  lines.length = 0;
+
+  log('bench: title screen');
+  checkMenu(deps, report);
+  for (const l of lines) log(l);
+  lines.length = 0;
 
   log('bench: render checks');
   checkRender(deps, report);

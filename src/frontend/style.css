@@ -133,3 +133,106 @@ canvas#game {
 }
 
 .set-btn-primary:hover { background: #377f92; }
+
+/* ------------------------------------------------------------ title screen */
+
+/* A full-window backdrop, unlike the settings card — the title screen is a
+   screen, not a dialog, and it should not leave the board behind it readable.
+   `display: none` for the same reason as the panel: a closed overlay must not be
+   able to take a key. */
+.menu { display: none; }
+
+.menu.menu-open {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 14, .93);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #dde3ec;
+}
+
+.menu-title {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: .34em;
+  color: #eef2f7;
+  margin-bottom: 22px;
+  /* Letter-spacing adds its space after the last character too, which leaves the
+     word sitting left of centre. Half a letter-space pulls it back. */
+  text-indent: .17em;
+}
+
+.menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(420px, calc(100vw - 32px));
+}
+
+/* Flex rather than a grid: a mode row carries a label, a goal and sometimes a
+   best, while the Settings row carries only a label — a fixed column count would
+   have to be kept in step with that. */
+.menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #141821;
+  color: #dde3ec;
+  border: 1px solid #232a35;
+  border-radius: 9px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover { background: #1a1f29; }
+
+.menu-item-on {
+  background: #1d2632;
+  border-color: #3ec6e0;
+}
+
+.menu-item-label { font-weight: 700; }
+
+.menu-item-goal { color: #3ec6e0; font-size: 12px; }
+
+.menu-item-best { color: #8ce9a8; font-size: 12px; }
+
+.menu-item-blurb {
+  margin-left: auto;
+  color: #6c7686;
+  font-size: 11px;
+}
+
+.menu-scores {
+  width: min(420px, calc(100vw - 32px));
+  /* Reserved even when empty, so switching the highlight between a mode and
+     Settings does not shift the whole screen. */
+  min-height: 92px;
+  margin-top: 16px;
+}
+
+.menu-empty { color: #5d6675; font-size: 12px; }
+
+.menu-score {
+  display: flex;
+  gap: 10px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.menu-score-rank { width: 16px; color: #5d6675; }
+
+.menu-score-value { font-weight: 600; }
+
+.menu-score-detail { margin-left: auto; color: #6c7686; }
+
+.menu-hint {
+  margin-top: 20px;
+  font-size: 11px;
+  color: #5d6675;
+}

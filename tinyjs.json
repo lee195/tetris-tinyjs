@@ -1,9 +1,9 @@
 {
   "name": "tetris",
-  "title": "tetris",
+  "title": "Tetris",
   "size": "960x640",
   "id": "com.example.tetris",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "minTinyjsVersion": "0.42.0",
 
   "api": {
@@ -23,7 +23,13 @@
       "listReplays",
       "saveReplay",
       "loadReplay",
-      "deleteReplay"
+      "deleteReplay",
+      "loadSfx",
+      "sampler.play",
+      "sampler.master",
+      "sampler.stopAll",
+      "sampler.bytes",
+      "sampler.hostResult"
     ]
   }
 }

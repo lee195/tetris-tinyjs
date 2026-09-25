@@ -64,6 +64,19 @@ export function makeIntent() {
     rotateCCW: false,
     hardDrop: false,
     hold: false,
+    // Outcome fields: what the game actually accepted, written by `apply.js`.
+    //
+    // They are here rather than derived from the game state afterwards because
+    // the state cannot answer the question. A rotation followed by a shift in
+    // the same tick — which `apply.js` does deliberately, rotate-then-shift —
+    // leaves `lastAction` as 'move', so the rotation is invisible; and a hold
+    // followed by a lock and a spawn in the same tick has `holdUsed` reset to
+    // false before any caller can look. Both are real, and both silently drop a
+    // sound effect. They are declared here so the object's shape is settled
+    // once, instead of being grown into existence on the first tick.
+    didRotate: false,
+    didHold: false,
+    didHardDrop: false,
   };
 }
 

@@ -33,6 +33,9 @@ export const LIMITS = Object.freeze({
   lineClearDelay: { min: 0, max: 60, step: 1 },
   sdf: { min: 1, max: 60, step: 1 },
   level: { min: 1, max: 15, step: 1 },
+  // A percentage, not a 0..1 fraction, because the panel's sliders are whole
+  // numbers — and because "80" is what a player expects a volume control to say.
+  volume: { min: 0, max: 100, step: 5 },
 });
 
 /**
@@ -64,6 +67,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     are: ARE_DEFAULT,
     lineClearDelay: LINE_CLEAR_DELAY_DEFAULT,
   },
+  // Audio. Deliberately absent from `settingsToConfig` — that function produces
+  // what the *simulation* needs, and the simulation must not know that sound
+  // exists, or the volume would become part of the replay config.
+  volume: 80,
+  muted: false,
 });
 
 function clamp(value, range, fallback) {
@@ -115,6 +123,11 @@ export function normalizeSettings(raw) {
       are: clamp(t.are, LIMITS.are, d.timing.are),
       lineClearDelay: clamp(t.lineClearDelay, LIMITS.lineClearDelay, d.timing.lineClearDelay),
     },
+    volume: clamp(r.volume, LIMITS.volume, d.volume),
+    // Strictly boolean, so a hand-edited `"muted": "no"` means unmuted rather
+    // than merely truthy. Anything else would make the setting impossible to
+    // turn off by editing the file.
+    muted: r.muted === true,
   };
 }
 
@@ -153,6 +166,8 @@ export function captureSettings(settings, handlingCfg, game) {
     levels,
     handling: encodeHandling(handlingCfg),
     timing: { are: game.are, lineClearDelay: game.lineClearDelay },
+    volume: n.volume,
+    muted: n.muted,
   });
 }
 
@@ -167,5 +182,7 @@ export function settingsEqual(a, b) {
     && x.handling.sdf === y.handling.sdf
     && x.handling.dcd === y.handling.dcd
     && x.timing.are === y.timing.are
-    && x.timing.lineClearDelay === y.timing.lineClearDelay;
+    && x.timing.lineClearDelay === y.timing.lineClearDelay
+    && x.volume === y.volume
+    && x.muted === y.muted;
 }

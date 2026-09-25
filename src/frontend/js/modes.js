@@ -112,6 +112,21 @@ export function formatTicks(ticks) {
   return m + ':' + String(s).padStart(2, '0') + '.' + String(cs).padStart(2, '0');
 }
 
+/**
+ * Ticks as a plain duration, `m:ss` — no hundredths.
+ *
+ * The companion to `formatTicks`, and separate on purpose. A *measured* time wants
+ * centiseconds: a Sprint result is decided by them. A mode's *goal* does not —
+ * "2:00" is the round number the mode is built around, and writing "2:00.00"
+ * claims a precision the goal does not have.
+ */
+export function formatDuration(ticks) {
+  const ms = ticks * (1000 / TICK_HZ);
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return m + ':' + String(s).padStart(2, '0');
+}
+
 /** Ticks left on a time-limited mode, or 0 when there is no limit. */
 export function ticksRemaining(mode, ticks) {
   if (!mode.timeLimitTicks) return 0;

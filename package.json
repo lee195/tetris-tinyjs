@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/modules.test.mjs && node test/sim.test.mjs && node test/handling.test.mjs && node test/render.test.mjs && node test/scoring.test.mjs && node test/replay.test.mjs && node test/settings.test.mjs"
+    "test": "node test/modules.test.mjs && node test/sim.test.mjs && node test/handling.test.mjs && node test/render.test.mjs && node test/scoring.test.mjs && node test/replay.test.mjs && node test/settings.test.mjs && node test/sfxgen.test.mjs && node test/sfx.test.mjs && node test/menu.test.mjs"
   }
 }

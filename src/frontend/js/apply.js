@@ -25,18 +25,28 @@ import { tick, onLock, shiftBlocked, SOFT_DROP } from './handling.js';
  * Returns the intent that was applied (a reused object — read it now).
  */
 export function stepWithInput(game, handling, input) {
-  // Captured before the intent is applied, because a hard drop locks the piece
-  // inside `applyIntent` — reading it afterwards would miss that lock entirely.
-  const hadPiece = game.piece !== -1;
+  // Captured before the intent is applied, because a hard drop locks *inside*
+  // `applyIntent` — reading either of these afterwards would miss that lock.
+  const clearBefore = game.lastClear;
 
   const it = tick(handling, input);
   applyIntent(game, handling, it);
   step(game);
 
-  // `piece === -1` is the game's "no active piece" marker, set by the lock and
-  // cleared on the next spawn — so this catches the transition exactly, rather
-  // than `pieces`, which only increments after the spawn delay.
-  if (hadPiece && game.piece === -1) onLock(handling);
+  // A lock is detected from `lastClear` identity, and deliberately not from
+  // `piece === -1`.
+  //
+  // `lockCurrent` assigns a fresh `lastClear` on EVERY lock, clear or not, so
+  // identity is exact — checked against the cells placed on the board, which is
+  // an independent count. The `piece === -1` marker is not exact: a hard drop
+  // locks inside `applyIntent`, so with ARE 0 the `step` above spawns in the
+  // same tick and the marker is never visible from out here. That silently
+  // skipped this call for every hard drop at the default ARE, which is a DCD
+  // bug — DCD is off by default, and that is the only reason it went unnoticed.
+  //
+  // (Gravity locks are unaffected either way: they happen inside `step` and end
+  // their own tick, so the marker does survive those.)
+  if (game.lastClear !== clearBefore) onLock(handling);
 
   return it;
 }
@@ -60,12 +70,24 @@ export function stepWithInput(game, handling, input) {
  * Returns true if the game was in a state to accept input. A false return does
  * **not** mean the intent was discarded: the DAS charge deliberately keeps
  * running through line clears and spawns so the next piece is already moving.
+ *
+ * Also records what actually landed on `it.didRotate`, `it.didHold` and
+ * `it.didHardDrop` — see the note on those fields in `makeIntent`. They are
+ * cleared at the top of every call, so they describe this tick and no other.
  */
 export function applyIntent(game, handling, it) {
+  // Cleared BEFORE the early return below, not after it. A tick where the game
+  // will not accept input would otherwise leave the previous tick's outcomes in
+  // place, and a caller reading them would see an action from two ticks ago —
+  // which is precisely how a one-shot sound effect fires twice.
+  it.didRotate = false;
+  it.didHold = false;
+  it.didHardDrop = false;
+
   if (game.status !== STATUS.FALLING) return false;
 
-  if (it.rotateCW) rotate(game, 1);
-  if (it.rotateCCW) rotate(game, -1);
+  if (it.rotateCW && rotate(game, 1)) it.didRotate = true;
+  if (it.rotateCCW && rotate(game, -1)) it.didRotate = true;
 
   if (it.shift !== 0) {
     if (it.toWall) {
@@ -79,7 +101,9 @@ export function applyIntent(game, handling, it) {
     }
   }
 
-  if (it.hold) holdPiece(game);
+  // `holdPiece` returns false only when the hold is unavailable — once per
+  // piece — so its return value is the success signal.
+  if (it.hold) it.didHold = holdPiece(game);
 
   if (it.softDrop === SOFT_DROP.TO_FLOOR) {
     while (softDrop(game)) { /* to the floor */ }
@@ -87,7 +111,13 @@ export function applyIntent(game, handling, it) {
     softDrop(game);
   }
 
-  if (it.hardDrop) hardDrop(game);
+  // The status is re-checked rather than assumed. A hold above can top the game
+  // out, and `hardDrop` on a finished game returns 0 without locking — so
+  // trusting the distance would report a drop that never happened.
+  if (it.hardDrop && game.status === STATUS.FALLING) {
+    hardDrop(game);
+    it.didHardDrop = true;
+  }
 
   return true;
 }
