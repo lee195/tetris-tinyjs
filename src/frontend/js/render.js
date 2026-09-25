@@ -58,6 +58,8 @@ const PAGE_BG = '#0b0d11';
 const FRAME = '#2a3038';
 const LABEL = '#6c7686';
 const VALUE = '#dde3ec';
+/** The raced run's stack: present but clearly not yours. */
+const GHOST = 'rgba(150, 170, 200, 0.36)';
 
 /* ------------------------------------------------------------------- layout */
 
@@ -219,6 +221,28 @@ function drawShape(ctx, layout, shape, px, py, fill, light) {
   }
 }
 
+/**
+ * Outline a board's placed blocks — the ghost run's stack.
+ *
+ * Outlines rather than fills, because this is drawn under the live board: a
+ * filled ghost would hide the board being played, while an outline shows through
+ * the gaps and still reads as a height comparison at a glance.
+ */
+function drawStack(ctx, layout, board) {
+  const cell = layout.cell;
+  ctx.strokeStyle = GHOST;
+  ctx.lineWidth = 1;
+  for (let y = VISIBLE_TOP; y < TOTAL_ROWS; y++) {
+    const mask = board.rows[y];
+    if (mask === 0) continue;
+    const rowY = boardCellY(layout, y);
+    for (let x = 0; x < COLS; x++) {
+      if (!(mask & (1 << x))) continue;
+      ctx.strokeRect(boardCellX(layout, x) + 0.5, rowY + 0.5, cell - 1, cell - 1);
+    }
+  }
+}
+
 function text(ctx, str, x, y, color, font) {
   ctx.fillStyle = color;
   ctx.font = font;
@@ -227,9 +251,10 @@ function text(ctx, str, x, y, color, font) {
 
 /**
  * Draw one frame. Everything the renderer needs is read from `game`; `flags`
- * carries the UI state that is not part of the simulation.
+ * carries the UI state that is not part of the simulation, and `ghost` — when
+ * present — is a second game whose stack is drawn behind the live one.
  */
-export function draw(r, game, flags) {
+export function draw(r, game, flags, ghost) {
   const t0 = performance.now();
   syncSize(r);
   const ctx = r.ctx;
@@ -242,6 +267,11 @@ export function draw(r, game, flags) {
   // Well
   ctx.fillStyle = WELL_BG;
   ctx.fillRect(L.boardX, L.boardY, L.boardW, L.boardH);
+
+  // The ghost run's stack goes *under* the live one, so it reads as a silhouette
+  // visible through the gaps in your own board. Drawn on top it would obscure
+  // the board you are actually playing, which is the opposite of useful.
+  if (ghost) drawStack(ctx, L, ghost.board);
 
   // Placed blocks. Empty rows are skipped by a single mask compare, which is
   // most of them.
@@ -285,7 +315,7 @@ export function draw(r, game, flags) {
   ctx.lineWidth = 1;
   ctx.strokeRect(L.boardX - 0.5, L.boardY - 0.5, L.boardW + 1, L.boardH + 1);
 
-  drawPanel(ctx, L, game);
+  drawPanel(ctx, L, game, flags);
   if (flags && flags.banner) drawBanner(ctx, L, flags.banner);
   if (flags && flags.over) drawOverlay(ctx, L, game);
   else if (flags && flags.paused) drawOverlay(ctx, L, null);
@@ -315,7 +345,7 @@ function drawBanner(ctx, L, text) {
 
 /* -------------------------------------------------------------------- panel */
 
-function drawPanel(ctx, L, game) {
+function drawPanel(ctx, L, game, flags) {
   const cell = L.cell;
   const x = L.panelX;
   const w = L.panelW;
@@ -332,7 +362,12 @@ function drawPanel(ctx, L, game) {
 
   // Mode, and the clock for the modes that are timed. The clock is derived from
   // the simulation's tick count, so it can never disagree with the game state.
-  text(ctx, mode.label.toUpperCase(), x, y + labelSize, LABEL, labelFont);
+  // A prefix marks the two states where what you are watching is not a live run.
+  let tag = mode.label.toUpperCase();
+  let tagColour = LABEL;
+  if (flags && flags.watching) { tag = 'REPLAY · ' + tag; tagColour = VALUE; }
+  else if (flags && flags.ghost) { tag = 'GHOST · ' + tag; tagColour = VALUE; }
+  text(ctx, tag, x, y + labelSize, tagColour, labelFont);
   y += Math.round(cell * 0.6);
   if (mode.showClock) {
     const shown = mode.timeLimitTicks

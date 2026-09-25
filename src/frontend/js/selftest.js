@@ -189,6 +189,28 @@ function checkRender(deps, report) {
   // 10. And the paused overlay must not throw on a null result.
   draw(renderer, g, { paused: true, over: false, banner: '' });
   report.check('the paused overlay draws without a result', true, 'no exception');
+
+  // 11. The ghost run's stack. It is drawn as outlines *under* the live board, so
+  //     it has to show in the gaps without hiding anything — an outline on the
+  //     cell border and an untouched cell centre.
+  const ghostGame = makeGame({ seed: 12 });
+  step(ghostGame);
+  ghostGame.board.rows.fill(0);
+  ghostGame.board.colors.fill(0);
+  ghostGame.board.top.fill(TOTAL_ROWS);
+  setCell(ghostGame.board, 7, TOTAL_ROWS - 1, 1);   // a column the live board leaves empty
+  draw(renderer, g, { paused: false, over: false, banner: '' }, ghostGame);
+
+  const img3 = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const stackX = boardCellX(L, 7);
+  const stackY = boardCellY(L, TOTAL_ROWS - 1);
+  const edge = at(img3, stackX + 0.5, stackY + L.cell / 2, dpr);
+  const centre = at(img3, stackX + L.cell / 2, stackY + L.cell / 2, dpr);
+
+  report.check('the ghost run is outlined under the live board',
+    !near(edge, WELL_BG, 4), show(edge));
+  report.check('the ghost is an outline, not a fill',
+    near(centre, WELL_BG, 4), show(centre));
 }
 
 /* ------------------------------------------------------------ pacing checks */

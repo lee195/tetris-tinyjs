@@ -8,12 +8,17 @@
  * frame it arrives rather than the one after. Worst case is therefore one frame
  * (~16.7 ms), not two.
  *
- * One subtlety worth stating, because it is easy to "fix" into a bug:
- * **input is polled only on frames that actually run a tick.** `pollInput`
- * consumes the edge latches, so polling on a frame where the accumulator yields
- * zero ticks would silently swallow a press. Leaving the latches in place means
- * they are picked up by the next frame that ticks — which is correct, since
- * there was no simulation step for the press to apply to.
+ * Two subtleties worth stating, because both are easy to "fix" into bugs:
+ *
+ *  - **Input is polled only on frames that actually run a tick.** `pollInput`
+ *    consumes the edge latches, so polling on a frame where the accumulator
+ *    yields zero ticks would silently swallow a press. Leaving the latches in
+ *    place means the next frame that ticks picks them up — correct, since there
+ *    was no simulation step for the press to apply to.
+ *  - **The replay log is recorded per tick, not per frame.** The keyboard is
+ *    polled once per frame but several ticks may run in it, and `tick()` has
+ *    consumed the edges by the second one. So `recordTick` is called inside the
+ *    tick loop, before each step.
  */
 
 import { TICK_MS } from './constants.js';
@@ -25,6 +30,10 @@ import { stepWithInput } from './apply.js';
 import { makeLoop, advance, resetLoop } from './loop.js';
 import { makeRenderer, draw } from './render.js';
 import { makePerf, recordFrame, stats, resetPerf, drawPerf } from './perf.js';
+import {
+  makeRecorder, recordTick, finishRecording, buildReplay, verifyReplay,
+  startPlayback, playbackStep,
+} from './replay.js';
 import { runSelfTest } from './selftest.js';
 
 /** How long a "TETRIS" / "T-SPIN DOUBLE" callout stays on screen, in ticks. */
@@ -42,7 +51,19 @@ const handling = makeHandling(DEFAULT_HANDLING);
 /** Reused, never rebuilt — the draw call must not allocate. */
 const flags = { paused: false, over: false, banner: '' };
 
+/** The live run. */
 let game;
+/** A playback being watched, or null. Takes over the display while set. */
+let watch = null;
+/** A playback raced alongside the live run, or null. */
+let ghost = null;
+
+let recorder = makeRecorder();
+let runRecorded = false;
+let lastReplay = null;
+/** The best-scoring replay of this session — the ghost's source. */
+let bestReplay = null;
+
 let showPerf = false;
 let mode = MODE.MARATHON;
 /** Identity of the last clear we showed a banner for, and when to stop. */
@@ -52,8 +73,8 @@ let bannerUntil = 0;
 
 function newGame(seed, nextMode) {
   if (nextMode) mode = nextMode;
-  // The seed is chosen once per game and kept on the state, because a replay is
-  // a seed plus an input log — Phase 4 records it.
+  // The seed is chosen once per game and recorded, because a replay is a seed
+  // plus an input log.
   game = makeGame({
     seed: seed === undefined ? (Date.now() >>> 0) : seed,
     mode,
@@ -61,6 +82,10 @@ function newGame(seed, nextMode) {
   resetHandling(handling);
   resetLoop(loop);
   resetPerf(perf);
+  recorder = makeRecorder();
+  runRecorded = false;
+  watch = null;
+  ghost = null;
   seenClear = null;
   banner = '';
   bannerUntil = 0;
@@ -69,6 +94,61 @@ function newGame(seed, nextMode) {
 /** Focus loss pauses. The input adapter has already cleared the held keys. */
 function isPaused() {
   return input.paused === true;
+}
+
+/* ---------------------------------------------------------------- replays */
+
+/**
+ * The run is over: close the log, build the replay, and check it reproduces.
+ *
+ * The verification re-runs the whole log, which is a few milliseconds — paid
+ * once, on the frame the game ended, where a hitch cannot be felt. It is worth
+ * paying every time: a replay that does not reproduce means something in the
+ * simulation has become non-deterministic, and the only place that can be
+ * noticed cheaply is here.
+ */
+function finishRun() {
+  runRecorded = true;
+  finishRecording(recorder);
+  lastReplay = buildReplay(game, handling.cfg, recorder.pairs);
+
+  const v = verifyReplay(lastReplay);
+  const summary = 'replay: ' + lastReplay.ticks + ' ticks in ' +
+    (lastReplay.log.length / 2) + ' pairs, score ' + v.score;
+  if (v.ok) {
+    report(summary + ' — verified');
+  } else {
+    report(summary + ' — DID NOT VERIFY (' + v.actual + ' vs ' + v.expected + ')');
+  }
+
+  const score = lastReplay.result ? lastReplay.result.score : 0;
+  const best = bestReplay && bestReplay.result ? bestReplay.result.score : -1;
+  if (score > best) bestReplay = lastReplay;
+}
+
+/** Watch the last run back. */
+function watchReplay(replay) {
+  if (!replay) {
+    report('replay: nothing recorded yet');
+    return;
+  }
+  watch = startPlayback(replay);
+  watch.done = false;
+  ghost = null;
+  seenClear = null;
+  banner = '';
+}
+
+/** Race the session's best run alongside the live one. */
+function toggleGhost() {
+  if (ghost) { ghost = null; return; }
+  if (watch) return;                    // not while watching a replay
+  if (!bestReplay) {
+    report('ghost: no completed run to race yet');
+    return;
+  }
+  ghost = startPlayback(bestReplay);
+  ghost.done = false;
 }
 
 /* ------------------------------------------------------------------- frame */
@@ -88,35 +168,48 @@ function onFrame(now) {
     loop.acc = 0;
   } else {
     ticks = advance(loop, dt);
-    if (ticks > 0) {
+
+    if (ticks > 0 && watch) {
+      // Watching: the log drives the simulation instead of the keyboard.
+      for (let i = 0; i < ticks && !watch.done; i++) {
+        if (!playbackStep(watch)) watch.done = true;
+      }
+    } else if (ticks > 0) {
       pollInput(input, frame);
       for (let i = 0; i < ticks; i++) {
+        // Before the tick consumes the edges — see the note at the top.
+        if (!runRecorded) recordTick(recorder, frame);
         stepWithInput(game, handling, frame);
+        if (ghost && !ghost.done && !playbackStep(ghost)) ghost.done = true;
         if (game.status === STATUS.OVER) break;
       }
     }
   }
 
-  flags.over = game.status === STATUS.OVER;
+  if (!watch && !runRecorded && game.status === STATUS.OVER) finishRun();
 
-  // The level curve lives in the simulation now, not here — it changes gravity,
-  // so a replay would diverge if the driver owned it.
-  flags.over = game.status === STATUS.OVER;
+  const shown = watch ? watch.game : game;
 
   // The clear callout. `lastClear` is a fresh object per lock, so identity is
   // the signal; comparing values would need a tick stamp in the sim, which is
   // presentation state that does not belong there.
-  if (game.lastClear && game.lastClear !== seenClear) {
-    seenClear = game.lastClear;
-    banner = game.lastClear.label;
-    if (game.lastClear.b2bApplied) banner = 'B2B ' + banner;
-    if (game.lastClear.combo > 0) banner += '  +' + game.lastClear.combo + ' COMBO';
-    bannerUntil = game.ticks + BANNER_TICKS;
+  if (shown.lastClear && shown.lastClear !== seenClear) {
+    seenClear = shown.lastClear;
+    banner = shown.lastClear.label;
+    if (shown.lastClear.b2bApplied) banner = 'B2B ' + banner;
+    if (shown.lastClear.combo > 0) banner += '  +' + shown.lastClear.combo + ' COMBO';
+    bannerUntil = shown.ticks + BANNER_TICKS;
   }
-  flags.banner = game.ticks < bannerUntil ? banner : '';
 
+  flags.over = shown.status === STATUS.OVER;
+  flags.banner = shown.ticks < bannerUntil ? banner : '';
   flags.paused = isPaused();
-  draw(renderer, game, flags);
+  flags.watching = !!watch;
+  flags.ghost = !!ghost;
+
+  // The ghost's board is drawn dimly under the live one, so a race reads as one
+  // stack behind another rather than two pictures to compare by eye.
+  draw(renderer, shown, flags, ghost ? ghost.game : null);
   recordFrame(perf, dt, renderer.drawMs, ticks, loop.dropped !== droppedBefore);
 
   if (showPerf) {
@@ -130,10 +223,10 @@ function onFrame(now) {
 /* ------------------------------------------------------------------- wiring */
 
 /**
- * Report an uncaught page error to the launcher's stdout.
+ * Report to the launcher's stdout.
  *
- * Without this an exception in the frame loop is *invisible*: `console.log` is
- * not forwarded from the page, so the game would simply stop animating with no
+ * Without this an uncaught page error is *invisible*: `console.log` is not
+ * forwarded from the page, so the game would simply stop animating with no
  * diagnostic anywhere. Worth having permanently, not just for debugging.
  */
 function report(msg) {
@@ -153,17 +246,25 @@ window.addEventListener('unhandledrejection', (e) => {
 attachInput(input, window, null);
 
 /**
- * Lifecycle keys are handled here rather than in the game's key map: restarting
- * and choosing a mode are driver concerns, not input-handling ones, and a
- * keydown event is already an edge so it needs no latching.
+ * Lifecycle keys are handled here rather than in the game's key map: restarting,
+ * choosing a mode and watching a replay are driver concerns, not input-handling
+ * ones, and a keydown event is already an edge so it needs no latching.
  *
- * Number keys pick a mode and start it immediately. A proper menu belongs in
- * Phase 5; this is the minimum that makes the modes reachable.
+ * Number keys pick a mode. A proper menu belongs in Phase 5; this is the minimum
+ * that makes the modes reachable.
  */
 const MODE_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2 };
 
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  if (e.code === 'Escape') { watch = null; return; }
+  if (e.code === 'KeyV') {
+    if (watch) watch = null;
+    else watchReplay(lastReplay);
+    return;
+  }
+  if (e.code === 'KeyG') { toggleGhost(); return; }
 
   const pick = MODE_KEYS[e.code];
   if (pick !== undefined && MODE_LIST[pick]) {
@@ -191,6 +292,12 @@ async function maybeBench() {
     return false;
   }
   if (!want) return false;
+
+  // Report *before* anything that can block. The activation below awaits a
+  // timer, and a suspended timer in an occluded window never resolves — so
+  // without this line a stalled bench run produces no output at all, and
+  // "the page never loaded" and "the window was hidden" look identical.
+  await tiny.api.call('log', { msg: 'bench: page up, bench flag set' });
 
   // The pacing half of the self-test needs a *visible* window: WebKit stops rAF
   // when the window is occluded, so a launch that leaves the window behind
