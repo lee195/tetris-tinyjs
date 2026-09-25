@@ -47,7 +47,15 @@ const MAX_SCORES_PER_MODE = 25;
  */
 const SFX_NAME = /^[a-z][a-z0-9]{0,15}$/;
 const MAX_SFX_ENTRIES = 16;
-const MAX_SFX_BYTES = 256 * 1024;
+export const MAX_SFX_BYTES = 256 * 1024;
+/**
+ * The longest base64 string that can still decode to `MAX_SFX_BYTES`.
+ *
+ * Exported, like the cap above, so `test/backend.test.mjs` can walk the boundary
+ * exactly rather than approximately. The launcher reads only `api` and `init`, so
+ * the extra names cost nothing.
+ */
+export const MAX_SFX_B64 = Math.ceil(MAX_SFX_BYTES / 3) * 4;
 
 /**
  * The mode the bench writes probe entries under.
@@ -74,7 +82,15 @@ function isFiniteNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
-/** base64 to bytes. `atob` exists in this runtime; the framework decodes the same way. */
+/**
+ * base64 to bytes. `atob` exists in this runtime; the framework decodes the same way.
+ *
+ * Deliberately has no size limit of its own — the caller owns the policy. Any
+ * caller must therefore bound `str` *before* calling: this allocates twice over,
+ * once for the decoded string `atob` returns and once for the byte array, so a
+ * check on the result has already paid the cost it was meant to avoid. There is
+ * one caller, `loadSfx`, and it checks the encoded length first.
+ */
 function b64ToU8(str) {
   const bin = atob(str);
   const u8 = new Uint8Array(bin.length);
@@ -335,13 +351,35 @@ export const api = {
       const name = e && typeof e.name === 'string' ? e.name : '';
       if (!SFX_NAME.test(name)) { failed = name || '(unnamed)'; break; }
 
+      // The bound goes on the *encoded* string, before the decode. `atob`
+      // allocates the decoded string and `b64ToU8` allocates a byte array
+      // beside it, so checking the decoded length instead means paying for an
+      // oversized payload twice before deciding it is too big — which is the
+      // one thing the cap exists to prevent.
+      const b64 = typeof e.bytesB64 === 'string' ? e.bytesB64 : '';
+      // Two conditions, two messages: an empty payload is a malformed request
+      // and an oversized one is a policy refusal, and "too large" for a missing
+      // field would send the next reader looking for a size bug that is not there.
+      if (!b64) {
+        failed = name + ' (no bytes)';
+        break;
+      }
+      if (b64.length > MAX_SFX_B64) {
+        failed = name + ' (too large)';
+        break;
+      }
+
       let bytes;
       try {
-        bytes = b64ToU8(typeof e.bytesB64 === 'string' ? e.bytesB64 : '');
+        bytes = b64ToU8(b64);
       } catch (err) {
         failed = name + ' (bad base64)';
         break;
       }
+      // Kept as well as the check above, and not redundantly: base64 spends four
+      // characters per three bytes, so the encoded bound rounds *up* and admits
+      // a payload up to two bytes over the cap. That check bounds the memory a
+      // rejected payload can cost; this one is the authority on the size.
       if (!bytes.length || bytes.length > MAX_SFX_BYTES || !looksLikeWav(bytes)) {
         failed = name + ' (not a usable wav)';
         break;
