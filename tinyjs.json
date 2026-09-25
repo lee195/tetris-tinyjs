@@ -1,0 +1,27 @@
+{
+  "name": "tetris",
+  "title": "tetris",
+  "size": "960x640",
+  "id": "com.example.tetris",
+  "version": "0.1.0",
+  "minTinyjsVersion": "0.42.0",
+
+  "api": {
+    "disable": ["*"],
+    "enable": [
+      "ping",
+      "quit",
+      "log",
+      "sysinfo",
+      "listDir",
+      "readFileHead",
+      "dialog.*",
+      "menu.set",
+      "win.setTitle",
+      "win.setSize",
+      "win.setPosition",
+      "win.getState",
+      "app.screens"
+    ]
+  }
+}

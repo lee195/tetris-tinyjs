@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  Phase 0 perf harness.
+
+  NO CSP META, deliberately. TINYJS_HTML materializes this file's CONTENT into
+  a temp dir as index.html (bridge.js:956-960), so sibling references like
+  <script src="bench.js"> resolve to <tempdir>/bench.js and silently fail —
+  the override page must be SELF-CONTAINED. A self-contained page needs an
+  inline script, which the production CSP ('self', no 'unsafe-inline') forbids.
+
+  So this page measures CSP-INDEPENDENT things only: rAF rate, keydown->rAF
+  latency, devicePixelRatio, canvas draw cost. The CSP-dependent question
+  (do ES modules load from file:// under the real policy?) is answered
+  separately, inside the real app, where siblings and the real CSP both apply.
+
+  Run:  TINYJS_HTML=<abs>/src/frontend/bench.html tinyjs dev
+-->
+<title>tinyjs bench</title>
+<style>
+  body { background:#1b1b1f; color:#e8e8ee; font:13px/1.5 ui-monospace,Menlo,monospace; margin:0; padding:16px; }
+  h1 { font-size:15px; margin:0 0 4px; }
+  .hint { color:#8a8a99; margin:0 0 12px; }
+  pre { background:#111114; border:1px solid #2a2a33; border-radius:6px; padding:12px; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Phase 0 — measure &amp; probe</h1>
+<p class="hint">Leave it running. Mash any key while it samples to measure real key latency.</p>
+<pre id="out">starting…</pre>
+<script>
+'use strict';
+const RAF_MS = 5000;
+const DRAW_ITERS = 400;
+const CELL = 32, COLS = 10, ROWS = 40;
+const SYNTH_EVERY_MS = 250;
+
+const lines = [];
+const outEl = document.getElementById('out');
+function add(s) { lines.push(s); outEl.textContent = lines.join('\n'); }
+
+function stats(xs) {
+  if (!xs.length) return null;
+  const s = Array.prototype.slice.call(xs).sort(function (a, b) { return a - b; });
+  const q = function (p) { return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+  let sum = 0;
+  for (let i = 0; i < s.length; i++) sum += s[i];
+  return { n: s.length, mean: +(sum / s.length).toFixed(3), med: +(q(0.5).toFixed(3)),
+           p95: +(q(0.95).toFixed(3)), p99: +(q(0.99).toFixed(3)),
+           min: +(s[0].toFixed(3)), max: +(s[s.length - 1].toFixed(3)) };
+}
+const fmt = (o) => (o ? JSON.stringify(o) : 'n/a');
+
+function environment() {
+  return {
+    dpr: window.devicePixelRatio,
+    inner: window.innerWidth + 'x' + window.innerHeight,
+    screen: window.screen.width + 'x' + window.screen.height,
+    colorDepth: window.screen.colorDepth,
+    hasFocus: document.hasFocus(),
+    visibility: document.visibilityState,
+    eventTiming: (typeof PerformanceObserver !== 'undefined' &&
+      PerformanceObserver.supportedEntryTypes &&
+      PerformanceObserver.supportedEntryTypes.indexOf('event') !== -1) || false,
+    entryTypes: (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes) || null,
+  };
+}
+
+function sampleRaf(ms) {
+  return new Promise(function (resolve) {
+    const intervals = [], real = [], synth = [];
+    let pendingReal = null, pendingSynth = null;
+    window.addEventListener('keydown', function (e) { if (e.isTrusted) pendingReal = performance.now(); }, true);
+    const synthTimer = setInterval(function () {
+      pendingSynth = performance.now();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
+    }, SYNTH_EVERY_MS);
+
+    let last = performance.now();
+    const start = last;
+    let frames = 0;
+    function step(t) {
+      const dt = t - last;
+      if (frames > 0) intervals.push(dt);
+      last = t; frames++;
+      if (pendingReal !== null) { real.push(t - pendingReal); pendingReal = null; }
+      if (pendingSynth !== null) { synth.push(t - pendingSynth); pendingSynth = null; }
+      if (t - start < ms) requestAnimationFrame(step);
+      else {
+        clearInterval(synthTimer);
+        resolve({ frames: frames, elapsed: +(t - start).toFixed(1),
+                  fps: +((frames / ((t - start) / 1000)).toFixed(2)),
+                  intervals: intervals, real: real, synth: synth });
+      }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+function makeAtlas() {
+  const cols = ['#000','#0ff','#ff0','#f0f','#0f0','#f00','#00f','#fa0'];
+  const atlas = [];
+  for (let i = 0; i < 8; i++) {
+    const c = document.createElement('canvas');
+    c.width = CELL; c.height = CELL;
+    const g = c.getContext('2d');
+    g.fillStyle = cols[i]; g.fillRect(0, 0, CELL, CELL);
+    atlas.push(c);
+  }
+  return atlas;
+}
+
+function drawBudget() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = COLS * CELL, h = ROWS * CELL;
+  const atlas = makeAtlas();
+  const cell = [];
+  for (let i = 0; i < ROWS * COLS; i++) cell.push(i % 8);
+
+  const a = document.createElement('canvas');
+  a.width = Math.round(w * dpr); a.height = Math.round(h * dpr);
+  const ga = a.getContext('2d'); ga.scale(dpr, dpr);
+  const timesA = [];
+  for (let it = 0; it < DRAW_ITERS; it++) {
+    const t0 = performance.now();
+    ga.fillStyle = '#111'; ga.fillRect(0, 0, w, h);
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++)
+        ga.drawImage(atlas[cell[r * COLS + c]], c * CELL, r * CELL);
+    timesA.push(performance.now() - t0);
+  }
+
+  const board = document.createElement('canvas');
+  board.width = Math.round(w * dpr); board.height = Math.round(h * dpr);
+  const gb0 = board.getContext('2d'); gb0.scale(dpr, dpr);
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      gb0.drawImage(atlas[cell[r * COLS + c]], c * CELL, r * CELL);
+
+  const b = document.createElement('canvas');
+  b.width = Math.round(w * dpr); b.height = Math.round(h * dpr);
+  const gb = b.getContext('2d'); gb.scale(dpr, dpr);
+  const timesB = [];
+  for (let it = 0; it < DRAW_ITERS; it++) {
+    const t0 = performance.now();
+    gb.fillStyle = '#111'; gb.fillRect(0, 0, w, h);
+    gb.drawImage(board, 0, 0, w, h);
+    for (let i = 0; i < 4; i++) gb.drawImage(atlas[i], i * CELL, 0);
+    timesB.push(performance.now() - t0);
+  }
+  return { full: stats(timesA), cached: stats(timesB), dpr: dpr, css: w + 'x' + h };
+}
+
+// Move onto the highest-scale display (the Retina panel) so the numbers
+// describe where the game will actually be played. Reports where it landed.
+async function moveToBestDisplay() {
+  let screens = null;
+  try { screens = await tiny.app.screens(); }
+  catch (e) { return 'app.screens() failed: ' + e; }
+  if (!screens || !screens.length) return 'no screens reported';
+
+  const info = screens.map(function (s) {
+    return s.name + ' ' + s.width + 'x' + s.height + ' scale=' + s.scale + (s.primary ? '*' : '');
+  }).join(' | ');
+
+  let best = screens[0];
+  for (let i = 1; i < screens.length; i++) {
+    if ((screens[i].scale || 1) > (best.scale || 1)) best = screens[i];
+  }
+  if ((best.scale || 1) <= (screens[0].scale || 1) && screens.length === 1) {
+    return 'only one screen: ' + info;
+  }
+  try { await tiny.win.setPosition(best.x + 120, best.y + 120); }
+  catch (e) { return 'setPosition failed: ' + e + ' | ' + info; }
+  return info + ' -> moved to ' + best.name;
+}
+
+function waitTiny(timeoutMs) {
+  return new Promise(function (resolve) {
+    const t0 = performance.now();
+    (function poll() {
+      if (window.tiny) return resolve(true);
+      if (performance.now() - t0 > timeoutMs) return resolve(false);
+      setTimeout(poll, 20);
+    })();
+  });
+}
+
+(async function main() {
+  if (!(await waitTiny(3000))) { add('FATAL: window.tiny never appeared'); return; }
+  add('tiny client ready');
+
+  add('screens: ' + (await moveToBestDisplay()));
+  await new Promise(function (r) { setTimeout(r, 1500); });  // let the move + dpr update settle
+  add('after move: dpr=' + window.devicePixelRatio +
+      ' inner=' + window.innerWidth + 'x' + window.innerHeight);
+
+  add('env: ' + fmt(environment()));
+
+  add('sampling rAF for ' + (RAF_MS / 1000) + 's (mash a key now)…');
+  const raf = await sampleRaf(RAF_MS);
+  add('rAF: frames=' + raf.frames + ' over ' + raf.elapsed + 'ms -> ' + raf.fps + ' fps');
+  add('rAF interval ms: ' + fmt(stats(raf.intervals)));
+  add('rAF jank: >16.7ms=' + raf.intervals.filter(d => d > 16.7).length +
+      ' >33.4ms=' + raf.intervals.filter(d => d > 33.4).length + ' of ' + raf.intervals.length);
+  add('key latency REAL  (n=' + raf.real.length + '): ' + fmt(stats(raf.real)));
+  add('key latency SYNTH (n=' + raf.synth.length + '): ' + fmt(stats(raf.synth)));
+
+  add('measuring canvas draw budget…');
+  const draw = drawBudget();
+  add('canvas dpr=' + draw.dpr + ' css=' + draw.css);
+  add('draw FULL   ms/frame: ' + fmt(draw.full));
+  add('draw CACHED ms/frame: ' + fmt(draw.cached));
+
+  for (let i = 0; i < lines.length; i++) {
+    try { await tiny.api.call('log', { msg: 'BENCH ' + lines[i] }); } catch (e) {}
+  }
+  try { await tiny.api.call('log', { msg: 'BENCH DONE' }); } catch (e) {}
+  add('done — quitting');
+  setTimeout(function () { tiny.quit(); }, 400);
+})().catch(async function (e) {
+  try { await tiny.api.call('log', { msg: 'BENCH FATAL ' + (e && e.stack ? e.stack : e) }); } catch (_) {}
+  add('FATAL: ' + e);
+});
+</script>
+</body>
+</html>

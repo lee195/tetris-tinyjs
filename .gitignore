@@ -1,0 +1,9 @@
+# Build output. `tinyjs dev` and `tinyjs build` regenerate these from src/.
+.build/
+dist/
+
+# No runtime dependencies today (vanilla zero-dependency template), but keep
+# this here so adding a dev-only tool later can't accidentally commit a tree.
+node_modules/
+
+.DS_Store
