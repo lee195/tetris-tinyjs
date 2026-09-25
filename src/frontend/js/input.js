@@ -93,11 +93,18 @@ export function attachInput(input, target, onFocusLost) {
   };
 
   const onBlur = () => {
-    resetInput(input);
-    input.paused = true;
+    pauseInput(input);
     if (onFocusLost) onFocusLost();
   };
 
+  // The counterpart to `onBlur`, and the one that used to be missing — see the
+  // note on `pauseInput`. Nothing else in the page writes `paused`, which is
+  // exactly why a flag whose only writer wrote `true` went unnoticed.
+  const onFocus = () => resumeInput(input);
+
+  // Occlusion pauses but does not resume: a window can become visible without
+  // becoming focused, and unpausing there would run the game with no keyboard
+  // attached to it. `focus` is the only signal that says the player is back.
   const onVisibility = () => {
     if (document.hidden) onBlur();
   };
@@ -105,12 +112,14 @@ export function attachInput(input, target, onFocusLost) {
   win.addEventListener('keydown', onKeyDown);
   win.addEventListener('keyup', onKeyUp);
   win.addEventListener('blur', onBlur);
+  win.addEventListener('focus', onFocus);
   document.addEventListener('visibilitychange', onVisibility);
 
   const detach = () => {
     win.removeEventListener('keydown', onKeyDown);
     win.removeEventListener('keyup', onKeyUp);
     win.removeEventListener('blur', onBlur);
+    win.removeEventListener('focus', onFocus);
     document.removeEventListener('visibilitychange', onVisibility);
     input.detach = null;
   };
@@ -151,6 +160,32 @@ export function pollInput(input, frame) {
 export function resetInput(input) {
   for (const k in input.held) input.held[k] = false;
   for (let i = 0; i < EDGE_ACTIONS.length; i++) input.edges[EDGE_ACTIONS[i]] = false;
+}
+
+/**
+ * Focus lost: drop the keys and pause.
+ *
+ * Exported and pure so the pair can be tested without a DOM. The wiring below is
+ * the only part that needs a window — and that wiring is where the bug was:
+ * `onBlur` paused and *nothing ever resumed*, so the first Cmd-Tab froze the game
+ * for the rest of the session. The two halves now sit together, where a missing
+ * counterpart is visible rather than implied.
+ */
+export function pauseInput(input) {
+  resetInput(input);
+  input.paused = true;
+}
+
+/**
+ * Focus regained: drop the keys again and resume.
+ *
+ * Clearing on the way back in matters as much as on the way out. A key released
+ * while another application had focus never delivered its `keyup` here, so the
+ * held flags would still claim it is down.
+ */
+export function resumeInput(input) {
+  resetInput(input);
+  input.paused = false;
 }
 
 export { KEYMAP };

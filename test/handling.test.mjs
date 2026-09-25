@@ -26,7 +26,9 @@ import {
   resetHandling, setHandling, SOFT_DROP,
 } from '../src/frontend/js/handling.js';
 import { applyIntent, stepWithInput } from '../src/frontend/js/apply.js';
-import { makeInput, pollInput, resetInput } from '../src/frontend/js/input.js';
+import {
+  makeInput, pollInput, resetInput, pauseInput, resumeInput, attachInput,
+} from '../src/frontend/js/input.js';
 import { ok, eq, group, done } from './harness.mjs';
 
 /* ---------------------------------------------------------------- helpers */
@@ -444,6 +446,82 @@ group('input adapter (the parts that run without a DOM)');
   pollInput(inp, f);
   ok(!f.left, 'resetInput clears held keys');
   ok(!f.hardEdge, 'and clears pending edge latches');
+}
+
+{
+  // The focus pair, tested as a pair because the halves only make sense together.
+  // This covers the pure functions; the *wiring* is covered below, which is where
+  // the bug actually lived.
+  const inp = makeInput();
+  eq(inp.paused, false, 'a fresh input is not paused');
+
+  pauseInput(inp);
+  eq(inp.paused, true, 'losing focus pauses');
+
+  resumeInput(inp);
+  eq(inp.paused, false, 'and regaining it resumes — the half that was missing');
+
+  for (let i = 0; i < 3; i++) { pauseInput(inp); resumeInput(inp); }
+  eq(inp.paused, false, 'and it does not stick after repeated focus changes');
+}
+
+{
+  // The wiring, and the reason this test exists at all.
+  //
+  // The bug was not in `resumeInput` — that function did not exist. It was that
+  // `attachInput` never registered a focus listener, so nothing ever called it.
+  // A test of the pure pair alone would have passed cheerfully while the game
+  // stayed frozen for the rest of the session, which is exactly how the bug
+  // survived this long.
+  //
+  // `document` is stubbed because `attachInput` registers a visibilitychange
+  // listener on it; `window` is passed in. Nothing else global is touched.
+  const listeners = {};
+  const fakeWin = {
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    removeEventListener: () => {},
+  };
+  const savedDoc = globalThis.document;
+  globalThis.document = { addEventListener: () => {}, removeEventListener: () => {}, hidden: false };
+
+  try {
+    const inp = makeInput();
+    attachInput(inp, fakeWin, null);
+
+    ok(typeof listeners.blur === 'function', 'attachInput listens for blur');
+    ok(typeof listeners.focus === 'function', 'and for focus — the listener that was missing');
+
+    // Guarded rather than called outright. A missing listener must be *reported*
+    // by the assertions above, not thrown from here — a throw takes the rest of
+    // the suite's results down with it, which is a worse failure than the one
+    // being tested for.
+    if (listeners.blur) listeners.blur();
+    eq(inp.paused, true, 'a blur pauses');
+    if (listeners.focus) listeners.focus();
+    eq(inp.paused, false, 'and a focus resumes, which is what used to never happen');
+  } finally {
+    globalThis.document = savedDoc;
+  }
+}
+
+{
+  // Both halves clear the keys, and on the way *back in* it matters most: a key
+  // released while another application had focus never delivered its keyup here,
+  // so the held flags would still claim it is down.
+  const inp = makeInput();
+  const f = makeInputFrame();
+  inp.held.right = true;
+  inp.edges.hardDrop = true;
+
+  pauseInput(inp);
+  pollInput(inp, f);
+  ok(!f.right && !f.hardEdge, 'pausing clears held keys and latches');
+
+  inp.held.right = true;
+  inp.edges.rotateCW = true;
+  resumeInput(inp);
+  pollInput(inp, f);
+  ok(!f.right && !f.cwEdge, 'and so does resuming');
 }
 
 {
