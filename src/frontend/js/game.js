@@ -51,10 +51,14 @@ export function makeGame(opts) {
   const o = opts || {};
   const seed = (o.seed === undefined ? 1 : o.seed) >>> 0;
   const mode = modeConfig(o.mode);
-  const level = o.level === undefined ? mode.startLevel : o.level;
+  // A player's speed preference overrides the mode's default. Floored at 1
+  // because gravityFrames(0) would leave a piece that never falls.
+  const startLevel = Math.max(1, (o.startLevel === undefined ? mode.startLevel : o.startLevel) | 0);
+  const level = o.level === undefined ? startLevel : o.level;
   const state = {
     seed,
     mode,
+    startLevel,
     board: makeBoard(),
     bag: makeBag(seed),
     queue: [],
@@ -203,7 +207,9 @@ function tickClearing(state) {
   // The level curve lives in the simulation, not the driver: it changes gravity,
   // so a replay would diverge if the driver owned it.
   const mode = state.mode;
-  if (mode.linesPerLevel) setLevel(state, levelForLines(mode, state.lines));
+  if (mode.linesPerLevel) {
+    setLevel(state, levelForLines(mode, state.lines, state.startLevel));
+  }
   if (mode.goalLines && state.lines >= mode.goalLines) {
     return endRun(state, ENDING.GOAL);
   }
@@ -381,6 +387,18 @@ export function ghostRow(state) {
 export function setLevel(state, level) {
   state.level = level;
   state.gravityFrames = gravityFrames(level);
+}
+
+/**
+ * Change how fast the run's pieces fall.
+ *
+ * Re-derives the level from the current line count, so a change takes effect at
+ * once rather than waiting for the next level-up. A speed preference should be
+ * felt while it is being dragged, not deferred to the next ten lines.
+ */
+export function setStartLevel(state, level) {
+  state.startLevel = Math.max(1, level | 0);
+  setLevel(state, levelForLines(state.mode, state.lines, state.startLevel));
 }
 
 /**

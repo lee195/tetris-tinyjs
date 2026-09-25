@@ -96,6 +96,33 @@ export function makePanel(root, handlers) {
   modeRow.appendChild(modeSelect);
   root.appendChild(modeRow);
 
+  /* -- start level, which is per mode rather than global -- */
+
+  const levelRow = el('div', 'set-row');
+  levelRow.appendChild(el('label', 'set-label', 'Start level'));
+  const levelRange = document.createElement('input');
+  levelRange.type = 'range';
+  levelRange.min = String(LIMITS.level.min);
+  levelRange.max = String(LIMITS.level.max);
+  levelRange.step = String(LIMITS.level.step);
+  levelRange.className = 'set-range';
+  levelRow.appendChild(levelRange);
+  const levelOut = el('output', 'set-value', '');
+  levelRow.appendChild(levelOut);
+  levelRow.appendChild(el('p', 'set-hint',
+    'how fast pieces fall — saved per mode, so Sprint can differ from Marathon'));
+  root.appendChild(levelRow);
+
+  levelRange.addEventListener('input', () => {
+    current = readInto(current);
+    levelOut.textContent = levelRange.value;
+    onChange(current);
+  });
+  levelRange.addEventListener('change', () => {
+    current = readInto(current);
+    onCommit(current);
+  });
+
   /* -- sliders -- */
 
   for (const c of CONTROLS) {
@@ -194,6 +221,12 @@ export function makePanel(root, handlers) {
 
   modeSelect.addEventListener('change', () => {
     current.mode = modeSelect.value;
+    // Deliberately NOT `readInto` here: that reads the level slider into
+    // `levels[modeSelect.value]`, and the select has already changed — so it
+    // would write the outgoing mode's level onto the incoming one. Show the new
+    // mode's stored level instead.
+    levelRange.value = String(current.levels[current.mode]);
+    levelOut.textContent = levelRange.value;
     onCommit(current);
   });
 
@@ -205,6 +238,7 @@ export function makePanel(root, handlers) {
       set(target, c.path, Number(input.value));
     }
     target.mode = modeSelect.value;
+    target.levels[modeSelect.value] = Number(levelRange.value);
     target.handling.sdf = instant.checked ? null : Number(sdfRange.value);
     return normalizeSettings(target);
   }
@@ -223,6 +257,8 @@ export function makePanel(root, handlers) {
     sdfRange.value = String(isInstant ? LIMITS.sdf.max : current.handling.sdf);
     sdfOut.textContent = isInstant ? 'instant' : String(current.handling.sdf);
     modeSelect.value = current.mode;
+    levelRange.value = String(current.levels[current.mode]);
+    levelOut.textContent = levelRange.value;
   }
 
   function setOpen(next) {

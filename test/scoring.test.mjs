@@ -10,11 +10,12 @@
  * the wrong number.
  */
 
-import { COLS, TOTAL_ROWS, PIECE, TICK_HZ } from '../src/frontend/js/constants.js';
+import { COLS, TOTAL_ROWS, PIECE, TICK_HZ, TICK_MS } from '../src/frontend/js/constants.js';
 import { makeBoard, setCell, recomputeTop, isPerfectClear, isEmpty } from '../src/frontend/js/board.js';
-import { detectTSpin, TSPIN, LOCK_DELAY } from '../src/frontend/js/rules.js';
+import { detectTSpin, TSPIN, LOCK_DELAY, gravityFrames } from '../src/frontend/js/rules.js';
 import {
   makeGame, step, rotate, move, softDrop, hardDrop, gameHash, STATUS, ENDING,
+  setStartLevel,
 } from '../src/frontend/js/game.js';
 import {
   scoreClear, dropPoints, basePoints, isDifficult, clearLabel,
@@ -362,8 +363,14 @@ group('modes');
   eq(levelForLines(MODES.marathon, 10), 2, 'then rises');
   eq(levelForLines(MODES.marathon, 25), 3, 'every ten lines');
 
-  eq(levelForLines(MODES.sprint, 0), 8, 'sprint holds a fixed level');
-  eq(levelForLines(MODES.sprint, 100), 8, 'however many lines are cleared');
+  // Sprint holds a fixed level rather than curving. Referenced from the mode
+  // rather than hardcoded, so changing the default is a one-line change.
+  eq(levelForLines(MODES.sprint, 0), MODES.sprint.startLevel, 'sprint holds a fixed level');
+  eq(levelForLines(MODES.sprint, 100), MODES.sprint.startLevel, 'however many lines are cleared');
+
+  // The override is how a player's speed preference reaches the simulation.
+  eq(levelForLines(MODES.sprint, 100, 9), 9, 'a start-level override is honoured');
+  eq(levelForLines(MODES.marathon, 25, 3), 5, 'and marathon curves from it: 3 + floor(25/10)');
 
   eq(MODES.ultra.timeLimitTicks, 120 * TICK_HZ, 'ultra is two minutes of ticks');
 
@@ -380,6 +387,51 @@ group('modes');
   eq(ticksRemaining(MODES.ultra, 0), 120 * TICK_HZ, 'remaining ticks count down');
   eq(ticksRemaining(MODES.ultra, 120 * TICK_HZ + 5), 0, 'and clamp at zero');
   eq(ticksRemaining(MODES.marathon, 100), 0, 'a mode with no limit reports none');
+}
+
+group('the speed a mode runs at');
+
+{
+  // Reported from play: "the fall speed in sprint seems fast". Sprint shipped at
+  // level 8 — 8 frames per cell, 2.5 s for a piece to fall the height of the
+  // well, against 19 s at Marathon's level 1. That is 7.6x faster, and it made
+  // gravity the obstacle rather than the clock.
+  const slow = makeGame({ seed: 1, mode: MODE.SPRINT });
+  const fast = makeGame({ seed: 1, mode: MODE.SPRINT, startLevel: 8 });
+
+  eq(slow.level, MODES.sprint.startLevel, 'sprint starts at the mode default');
+  ok(slow.gravityFrames > fast.gravityFrames,
+    'a lower start level means a slower fall (' + slow.gravityFrames + ' vs ' +
+    fast.gravityFrames + ' frames/cell)');
+  ok(slow.gravityFrames >= 20,
+    'the default is no longer a race (' + slow.gravityFrames + ' frames/cell, ~' +
+    (slow.gravityFrames * 19 * TICK_MS / 1000).toFixed(1) + 's for a full fall)');
+  ok(slow.gravityFrames < gravityFrames(1),
+    'but still faster than Marathon at level 1, so the mode has its own character');
+
+  // A start level below 1 would be a piece that never falls.
+  eq(makeGame({ seed: 1, mode: MODE.SPRINT, startLevel: 0 }).level, 1,
+    'a start level of 0 is floored to 1');
+  eq(makeGame({ seed: 1, mode: MODE.SPRINT, startLevel: -5 }).level, 1,
+    'and so is a negative one');
+}
+
+{
+  // A speed change mid-run must be felt at once, not at the next level-up.
+  const s = makeGame({ seed: 1, mode: MODE.SPRINT });
+  const before = s.gravityFrames;
+  setStartLevel(s, 1);
+  ok(s.gravityFrames > before, 'slowing down takes effect immediately');
+  eq(s.level, 1, 'and the level follows');
+  eq(s.startLevel, 1, 'and the preference is recorded on the state');
+
+  // For a mode with a curve, the level is re-derived from the line count rather
+  // than reset, so changing speed does not throw away the run's progress.
+  const m = makeGame({ seed: 1, mode: MODE.MARATHON });
+  m.lines = 25;
+  setStartLevel(m, 3);
+  eq(m.level, 5, 'a Marathon level is re-derived from the line count');
+  eq(m.startLevel, 3, 'with the new start level recorded');
 }
 
 group('modes end the run');
@@ -400,14 +452,62 @@ group('modes end the run');
   // row up from the row it fills.
   g.y = TOTAL_ROWS - 2;
 
+  const piecesBefore = g.pieces;
   hardDrop(g);
+  eq(g.pieces, piecesBefore, 'the final lock does not spawn a piece');
   eq(g.status, STATUS.CLEARING, 'the final row is clearing');
+
   step(g);
   eq(g.lines, MODES.sprint.goalLines, 'the goal line count is reached');
-  eq(g.status, STATUS.OVER, 'and the run ends');
+  eq(g.status, STATUS.OVER, 'and the run ends on the tick it clears');
   eq(g.result.reason, ENDING.GOAL, 'with the goal as the reason');
   eq(g.result.lines, 40, 'and the result records the run');
   ok(!g.dead, 'a completed run is not a top-out');
+
+  // The specific complaint from play — "it ended one piece after the 40th line".
+  // Pinned rather than changed: the run must end on the clearing tick, with the
+  // piece counter untouched and nothing left active.
+  eq(g.pieces, piecesBefore, 'no extra piece was spawned to reach the goal');
+  eq(g.piece, -1, 'and no piece is left on the board');
+}
+
+{
+  // A clear that *crosses* the goal ends at whatever count it reached, not at
+  // the goal — and it must not take an extra piece to notice.
+  function crossFrom(startLines) {
+    const g = makeGame({ seed: 6, mode: MODE.SPRINT });
+    step(g);
+    g.lines = startLines;
+    // An O fills two rows and two columns, so it can complete a double.
+    for (let x = 0; x < COLS; x++) {
+      setCell(g.board, x, TOTAL_ROWS - 2, 1);
+      setCell(g.board, x, TOTAL_ROWS - 1, 1);
+    }
+    for (let x = 4; x <= 5; x++) {
+      setCell(g.board, x, TOTAL_ROWS - 2, 0);
+      setCell(g.board, x, TOTAL_ROWS - 1, 0);
+    }
+    recomputeTop(g.board);
+    g.piece = PIECE.O;
+    g.rot = 0;
+    g.x = 4;
+    g.y = TOTAL_ROWS - 2;
+    const before = g.pieces;
+    hardDrop(g);
+    step(g);
+    return { g, before };
+  }
+
+  const exact = crossFrom(38);
+  eq(exact.g.lines, 40, 'a double from 38 lands exactly on the goal');
+  eq(exact.g.status, STATUS.OVER, 'and ends');
+  eq(exact.g.pieces, exact.before, 'without spawning anything');
+
+  const over = crossFrom(39);
+  eq(over.g.lines, 41, 'a double from 39 overshoots and ends at 41');
+  eq(over.g.status, STATUS.OVER, 'and ends just the same');
+  eq(over.g.pieces, over.before, 'also without spawning anything');
+  eq(over.g.result.lines, 41, 'the result records the count it actually reached');
 }
 
 {

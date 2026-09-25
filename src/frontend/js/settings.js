@@ -14,7 +14,7 @@
 
 import { encodeHandling, decodeHandling, DEFAULT_HANDLING } from './handling.js';
 import { ARE_DEFAULT, LINE_CLEAR_DELAY_DEFAULT } from './rules.js';
-import { MODE, MODES } from './modes.js';
+import { MODE, MODES, MODE_LIST } from './modes.js';
 
 /** Bump when the shape changes in a way that needs migrating. */
 export const SETTINGS_VERSION = 1;
@@ -32,11 +32,27 @@ export const LIMITS = Object.freeze({
   are: { min: 0, max: 30, step: 1 },
   lineClearDelay: { min: 0, max: 60, step: 1 },
   sdf: { min: 1, max: 60, step: 1 },
+  level: { min: 1, max: 15, step: 1 },
 });
+
+/**
+ * The level each mode starts at.
+ *
+ * Per mode, because a single shared value cannot serve both: Marathon wants 1
+ * (its identity is the level curve), Sprint wants something gentle because its
+ * identity is the clock. See the note on Sprint's `startLevel` in modes.js —
+ * shipping it at 8 made gravity the obstacle rather than the clock.
+ */
+function defaultLevels() {
+  const out = {};
+  for (const id of MODE_LIST) out[id] = MODES[id].startLevel;
+  return out;
+}
 
 export const DEFAULT_SETTINGS = Object.freeze({
   v: SETTINGS_VERSION,
   mode: MODE.MARATHON,
+  levels: Object.freeze(defaultLevels()),
   handling: {
     das: DEFAULT_HANDLING.das,
     arr: DEFAULT_HANDLING.arr,
@@ -59,6 +75,16 @@ function clamp(value, range, fallback) {
   return r;
 }
 
+/** Every mode gets an entry, so nothing downstream has to guard for a missing one. */
+function normalizeLevels(raw, fallback) {
+  const out = {};
+  for (const id of MODE_LIST) {
+    const v = raw && typeof raw === 'object' ? raw[id] : undefined;
+    out[id] = clamp(v, LIMITS.level, fallback[id]);
+  }
+  return out;
+}
+
 /**
  * Coerce anything into a usable settings object.
  *
@@ -74,6 +100,7 @@ export function normalizeSettings(raw) {
   return {
     v: SETTINGS_VERSION,
     mode: typeof r.mode === 'string' && MODES[r.mode] ? r.mode : d.mode,
+    levels: normalizeLevels(r.levels, d.levels),
     handling: {
       das: clamp(h.das, LIMITS.das, d.handling.das),
       arr: clamp(h.arr, LIMITS.arr, d.handling.arr),
@@ -92,13 +119,14 @@ export function normalizeSettings(raw) {
 }
 
 /**
- * What the simulation needs: a mode id, a handling config with a real
- * `Infinity` in it, and the two game timings.
+ * What the simulation needs: a mode id, how fast it should run, a handling
+ * config with a real `Infinity` in it, and the two game timings.
  */
 export function settingsToConfig(settings) {
   const n = normalizeSettings(settings);
   return {
     mode: n.mode,
+    startLevel: n.levels[n.mode],
     handling: decodeHandling(n.handling),
     timing: { are: n.timing.are, lineClearDelay: n.timing.lineClearDelay },
   };
@@ -107,12 +135,15 @@ export function settingsToConfig(settings) {
 /**
  * Capture the current state as settings, ready to save.
  *
- * Takes the game as well as the handling config because ARE and the line-clear
- * delay live on the game state — they are game rules, not input policy.
+ * Takes the whole settings object, not just the mode, because the levels are
+ * per mode: rebuilding from scratch would reset the *other* modes' levels to
+ * their defaults every time you finished a run.
  */
-export function captureSettings(mode, handlingCfg, game) {
+export function captureSettings(settings, handlingCfg, game) {
+  const n = normalizeSettings(settings);
   return normalizeSettings({
-    mode,
+    mode: n.mode,
+    levels: Object.assign({}, n.levels, { [n.mode]: game.startLevel }),
     handling: encodeHandling(handlingCfg),
     timing: { are: game.are, lineClearDelay: game.lineClearDelay },
   });
@@ -122,8 +153,9 @@ export function captureSettings(mode, handlingCfg, game) {
 export function settingsEqual(a, b) {
   const x = normalizeSettings(a);
   const y = normalizeSettings(b);
-  return x.mode === y.mode
-    && x.handling.das === y.handling.das
+  if (x.mode !== y.mode) return false;
+  for (const id of MODE_LIST) if (x.levels[id] !== y.levels[id]) return false;
+  return x.handling.das === y.handling.das
     && x.handling.arr === y.handling.arr
     && x.handling.sdf === y.handling.sdf
     && x.handling.dcd === y.handling.dcd

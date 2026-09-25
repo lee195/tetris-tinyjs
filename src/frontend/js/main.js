@@ -22,7 +22,7 @@
  */
 
 import { TICK_MS } from './constants.js';
-import { makeGame, STATUS, setTiming } from './game.js';
+import { makeGame, STATUS, setTiming, setStartLevel } from './game.js';
 import { MODE, MODE_LIST } from './modes.js';
 import { makeHandling, makeInputFrame, resetHandling, setHandling } from './handling.js';
 import { makeInput, attachInput, pollInput, resetInput } from './input.js';
@@ -134,6 +134,10 @@ function applyLive(next) {
   const cfg = settingsToConfig(next);
   setHandling(handling, cfg.handling);
   setTiming(game, cfg.timing);
+  // Only when the settings agree with the running mode. On a mode change this
+  // runs before the new game starts, and that game sets its own level — applying
+  // the new mode's speed to the old mode's board would be a jolt for no reason.
+  if (game.mode.id === cfg.mode) setStartLevel(game, cfg.startLevel);
 }
 
 /**
@@ -146,7 +150,7 @@ function commitSettings(next) {
   const modeChanged = next.mode !== settings.mode;
   settings = next;
   applyLive(next);
-  call('saveSettings', { settings: captureSettings(settings.mode, handling.cfg, game) });
+  call('saveSettings', { settings: captureSettings(settings, handling.cfg, game) });
   // Choosing a mode means playing it, so a mode change starts a run.
   if (modeChanged) newGame(undefined, settings.mode);
 }
@@ -164,12 +168,16 @@ async function loadSettings() {
 /* --------------------------------------------------------------------- game */
 
 function newGame(seed, nextMode) {
-  const cfg = settingsToConfig(settings);
+  // When a mode is being chosen, use *that* mode's speed rather than the one
+  // just left behind.
+  const target = nextMode || settings.mode;
+  const cfg = settingsToConfig(Object.assign({}, settings, { mode: target }));
   // The seed is chosen once per game and recorded, because a replay is a seed
   // plus an input log.
   game = makeGame({
     seed: seed === undefined ? (Date.now() >>> 0) : seed,
-    mode: nextMode || cfg.mode,
+    mode: target,
+    startLevel: cfg.startLevel,
   });
   setTiming(game, cfg.timing);
   resetHandling(handling);

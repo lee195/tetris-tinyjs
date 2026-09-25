@@ -21,7 +21,7 @@ import {
 } from '../src/frontend/js/settings.js';
 import { encodeHandling, decodeHandling, DEFAULT_HANDLING } from '../src/frontend/js/handling.js';
 import { ARE_DEFAULT, LINE_CLEAR_DELAY_DEFAULT } from '../src/frontend/js/rules.js';
-import { MODE } from '../src/frontend/js/modes.js';
+import { MODE, MODES, MODE_LIST } from '../src/frontend/js/modes.js';
 import { ok, eq, group, done } from './harness.mjs';
 
 /* ---------------------------------------------------------------- defaults */
@@ -155,9 +155,53 @@ group('the Infinity round trip');
   eq(after.timing.lineClearDelay, 4, 'and the line-clear delay');
 }
 
+/* ------------------------------------------------------------ per-mode speed */
+
+group('the per-mode speed');
+
+{
+  const d = normalizeSettings(null);
+  for (const id of MODE_LIST) {
+    eq(d.levels[id], MODES[id].startLevel, 'the default speed for ' + id + ' is the mode default');
+  }
+
+  // Clamped like everything else.
+  eq(normalizeSettings({ levels: { sprint: 999 } }).levels.sprint, LIMITS.level.max,
+    'a huge speed clamps to the maximum');
+  eq(normalizeSettings({ levels: { sprint: -3 } }).levels.sprint, LIMITS.level.min,
+    'and a negative one to the minimum');
+  eq(normalizeSettings({ levels: { sprint: 'fast' } }).levels.sprint, MODES.sprint.startLevel,
+    'junk falls back to the mode default');
+
+  // A partial map still produces every mode, so nothing downstream has to guard
+  // for a missing entry.
+  const partial = normalizeSettings({ levels: { marathon: 5 } });
+  eq(partial.levels.marathon, 5, 'a supplied mode is kept');
+  eq(partial.levels.sprint, MODES.sprint.startLevel, 'and the others are filled in');
+  ok(typeof partial.levels.ultra === 'number', 'every mode has a number');
+
+  // Through JSON, which is how it reaches disk.
+  const original = normalizeSettings({ mode: 'sprint', levels: { sprint: 9, marathon: 2 } });
+  const restored = normalizeSettings(JSON.parse(JSON.stringify(original)));
+  eq(restored.levels.sprint, 9, 'speeds survive a JSON round trip');
+  eq(restored.levels.marathon, 2, 'including the ones not being played');
+  ok(settingsEqual(original, restored), 'and equivalent speeds compare equal');
+  ok(!settingsEqual(original, normalizeSettings({ mode: 'sprint', levels: { sprint: 8 } })),
+    'while a different speed is not equal');
+}
+
 /* ------------------------------------------------------- settingsToConfig */
 
 group('settings to config');
+
+{
+  // The config carries the *running* mode's speed, which is what the simulation
+  // needs — it does not care what the other modes are set to.
+  eq(settingsToConfig({ mode: 'sprint', levels: { sprint: 7 } }).startLevel, 7,
+    'the config carries the running mode\'s speed');
+  eq(settingsToConfig({ mode: 'ultra' }).startLevel, DEFAULT_SETTINGS.levels.ultra,
+    'and the default when none was chosen');
+}
 
 {
   const cfg = settingsToConfig({
@@ -185,18 +229,30 @@ group('settings to config');
 group('capturing the live state');
 
 {
-  // The game state is where ARE and the line-clear delay live, so capturing has
-  // to take both the game and the handling config.
-  const fakeGame = { are: 3, lineClearDelay: 7 };
-  const captured = captureSettings('sprint', { das: 2, arr: 0, sdf: 9, dcd: 0 }, fakeGame);
+  // The game state is where the speed, ARE and the line-clear delay live, so
+  // capturing has to take the game as well as the handling config.
+  const fakeGame = { startLevel: 6, are: 3, lineClearDelay: 7 };
+  const captured = captureSettings(
+    { mode: 'sprint', levels: { marathon: 2 } },
+    { das: 2, arr: 0, sdf: 9, dcd: 0 },
+    fakeGame);
 
   eq(captured.mode, 'sprint', 'the mode is captured');
   eq(captured.handling.das, 2, 'the handling config is captured');
   eq(captured.timing.are, 3, 'ARE comes from the game state');
   eq(captured.timing.lineClearDelay, 7, 'and so does the line-clear delay');
+  eq(captured.levels.sprint, 6, 'the speed comes from the game state');
+  // The reason capture takes the whole settings object rather than just a mode:
+  // rebuilding from scratch would reset every *other* mode's speed to its
+  // default, so finishing a Sprint run would quietly undo a Marathon tweak.
+  eq(captured.levels.marathon, 2, 'and the other modes keep their own speeds');
+  eq(captured.levels.ultra, DEFAULT_SETTINGS.levels.ultra, 'while an untouched one stays default');
 
   // Capturing an instant SDF and restoring it must not change the feel.
-  const instant = captureSettings('marathon', { das: 10, arr: 2, sdf: Infinity, dcd: 0 }, fakeGame);
+  const instant = captureSettings(
+    { mode: 'marathon' },
+    { das: 10, arr: 2, sdf: Infinity, dcd: 0 },
+    fakeGame);
   eq(instant.handling.sdf, null, 'an instant SDF is captured as null');
   eq(settingsToConfig(instant).handling.sdf, Infinity, 'and restored as instant');
 }

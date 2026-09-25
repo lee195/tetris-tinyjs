@@ -167,6 +167,14 @@ export function buildReplay(game, handlingCfg, pairs) {
     cfg: {
       are: game.are,
       lineClearDelay: game.lineClearDelay,
+      /**
+       * How fast the run's pieces fell. Recorded because it changes gravity, so
+       * a replay that omitted it would not reproduce — and because a replay from
+       * before this field existed falls back to the mode's default, which is why
+       * changing that default invalidates older replays. The hash check reports
+       * that rather than silently replaying a different game.
+       */
+      startLevel: game.startLevel,
       // Through the shared encoder, so `sdf: Infinity` cannot become 1 on the
       // way back out of JSON. See encodeHandling.
       handling: encodeHandling(handlingCfg),
@@ -223,7 +231,14 @@ export function handlingFromReplay(replay) {
  * exactly as the recording was.
  */
 export function startPlayback(replay) {
-  const game = makeGame({ seed: replay.seed, mode: replay.mode });
+  const game = makeGame({
+    seed: replay.seed,
+    mode: replay.mode,
+    // `undefined` for replays recorded before the speed preference existed, in
+    // which case the mode's own default applies — which is exactly why changing
+    // that default invalidates those replays, and why the hash check matters.
+    startLevel: replay.cfg.startLevel,
+  });
   setTiming(game, { are: replay.cfg.are, lineClearDelay: replay.cfg.lineClearDelay });
   return {
     game,

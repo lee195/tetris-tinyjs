@@ -39,11 +39,22 @@ export const MODES = {
   sprint: {
     id: MODE.SPRINT,
     label: 'Sprint',
-    // A fixed level, so the mode measures routing and speed rather than
-    // survival. Level 8 is ~7.5 cells/second — fast enough that gravity is not
-    // the obstacle, slow enough that a hard drop is still a decision.
     blurb: '40 lines, as fast as you can',
-    startLevel: 8,
+    /**
+     * A fixed level, so the mode measures routing and speed rather than
+     * survival. **4, not the 8 this started at.**
+     *
+     * Level 8 is 8 frames per cell — 2.5 s for a piece to fall the height of the
+     * well, against 19 s at Marathon's level 1. That is 7.6x faster, and it makes
+     * gravity the obstacle instead of the clock. The original reasoning was
+     * backwards: a sprint should not fight the player, because the speed is
+     * supposed to come from the player.
+     *
+     * Level 4 is 28 frames per cell, 8.9 s — enough that the mode has a
+     * different character from Marathon, slow enough that a piece can be routed
+     * deliberately. Adjustable per mode via `settings.levels`; see `levelForLines`.
+     */
+    startLevel: 4,
     linesPerLevel: 0,
     goalLines: 40,
     timeLimitTicks: 0,
@@ -67,12 +78,19 @@ export function modeConfig(id) {
 }
 
 /**
- * The level for a given line count. `linesPerLevel` of 0 means the level never
- * changes, which is how Sprint holds its fixed speed.
+ * The level for a given line count.
+ *
+ * `startLevel` overrides the mode's own default. That is how a player's speed
+ * preference reaches the simulation: a mode should not fight the player, and
+ * how fast pieces fall is a preference rather than a rule.
+ *
+ * `linesPerLevel` of 0 means the level never changes, which is how Sprint holds
+ * its fixed speed.
  */
-export function levelForLines(mode, lines) {
-  if (!mode.linesPerLevel) return mode.startLevel;
-  return mode.startLevel + Math.floor(lines / mode.linesPerLevel);
+export function levelForLines(mode, lines, startLevel) {
+  const start = startLevel === undefined ? mode.startLevel : startLevel;
+  if (!mode.linesPerLevel) return start;
+  return start + Math.floor(lines / mode.linesPerLevel);
 }
 
 /** True when the run is over because the goal was met, not because of a top-out. */
