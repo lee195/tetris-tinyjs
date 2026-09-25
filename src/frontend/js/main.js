@@ -22,18 +22,20 @@
  */
 
 import { TICK_MS } from './constants.js';
-import { makeGame, STATUS } from './game.js';
+import { makeGame, STATUS, setTiming } from './game.js';
 import { MODE, MODE_LIST } from './modes.js';
-import { makeHandling, makeInputFrame, resetHandling, DEFAULT_HANDLING } from './handling.js';
-import { makeInput, attachInput, pollInput } from './input.js';
+import { makeHandling, makeInputFrame, resetHandling, setHandling } from './handling.js';
+import { makeInput, attachInput, pollInput, resetInput } from './input.js';
 import { stepWithInput } from './apply.js';
 import { makeLoop, advance, resetLoop } from './loop.js';
 import { makeRenderer, draw } from './render.js';
 import { makePerf, recordFrame, stats, resetPerf, drawPerf } from './perf.js';
 import {
   makeRecorder, recordTick, finishRecording, buildReplay, verifyReplay,
-  startPlayback, playbackStep,
+  startPlayback, playbackStep, scoreEntry,
 } from './replay.js';
+import { normalizeSettings, settingsToConfig, captureSettings } from './settings.js';
+import { makePanel } from './panel.js';
 import { runSelfTest } from './selftest.js';
 
 /** How long a "TETRIS" / "T-SPIN DOUBLE" callout stays on screen, in ticks. */
@@ -46,10 +48,10 @@ const perfOut = {};
 const loop = makeLoop();
 const input = makeInput();
 const frame = makeInputFrame();
-const handling = makeHandling(DEFAULT_HANDLING);
+const handling = makeHandling(normalizeSettings(null).handling);
 
 /** Reused, never rebuilt — the draw call must not allocate. */
-const flags = { paused: false, over: false, banner: '' };
+const flags = { paused: false, over: false, banner: '', watching: false, ghost: false, priorBest: 0 };
 
 /** The live run. */
 let game;
@@ -64,22 +66,114 @@ let lastReplay = null;
 /** The best-scoring replay of this session — the ghost's source. */
 let bestReplay = null;
 
+let settings = normalizeSettings(null);
+/** The persisted score table, kept in memory so the best can be shown live. */
+let scoreTable = [];
+/**
+ * The stored best for the mode of the run that just ended, captured *before*
+ * that run was written. Without it the overlay cannot tell "you beat the record"
+ * from "this is the record", because the save is asynchronous and may have
+ * landed by the time the first post-game frame draws.
+ */
+let priorBest = 0;
 let showPerf = false;
-let mode = MODE.MARATHON;
-/** Identity of the last clear we showed a banner for, and when to stop. */
 let seenClear = null;
 let banner = '';
 let bannerUntil = 0;
 
+/**
+ * The best recorded score for a mode.
+ *
+ * Per mode, because a Marathon score and a 40-line Sprint time are not
+ * comparable — showing a Marathon best while playing Sprint would be worse than
+ * showing nothing.
+ */
+function bestFor(modeId) {
+  let best = 0;
+  for (let i = 0; i < scoreTable.length; i++) {
+    const e = scoreTable[i];
+    if (e.mode === modeId && e.score > best) best = e.score;
+  }
+  return best;
+}
+
+const panel = makePanel(document.getElementById('settings'), {
+  onChange: (next) => { settings = next; applyLive(next); },
+  onCommit: (next) => { commitSettings(next); },
+  onClose: () => { /* the loop reads panel.isOpen() directly */ },
+});
+
+/* ------------------------------------------------------------------ bridge */
+
+function hasBridge() {
+  return typeof tiny !== 'undefined' && tiny.api;
+}
+
+/**
+ * Call a backend method, never throwing.
+ *
+ * Every bridge call goes through here, and every failure is *reported* rather
+ * than swallowed. A silent catch around a bridge call has already cost real time
+ * twice on this project: once when a gate denial looked like a hang, and once
+ * when it hid the error that explained a blank window.
+ */
+async function call(method, params) {
+  if (!hasBridge()) return null;
+  try {
+    return await tiny.api.call(method, params);
+  } catch (err) {
+    report(method + ': ' + (err && err.message ? err.message : String(err)));
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------ settings */
+
+/** Apply settings to the running game, without touching the seed or the board. */
+function applyLive(next) {
+  const cfg = settingsToConfig(next);
+  setHandling(handling, cfg.handling);
+  setTiming(game, cfg.timing);
+}
+
+/**
+ * A setting was committed — the control was released, or a select changed.
+ *
+ * Only here is anything written to disk: a slider drag fires dozens of `input`
+ * events and one `change`.
+ */
+function commitSettings(next) {
+  const modeChanged = next.mode !== settings.mode;
+  settings = next;
+  applyLive(next);
+  call('saveSettings', { settings: captureSettings(settings.mode, handling.cfg, game) });
+  // Choosing a mode means playing it, so a mode change starts a run.
+  if (modeChanged) newGame(undefined, settings.mode);
+}
+
+async function loadSettings() {
+  const stored = await call('getSettings');
+  settings = normalizeSettings(stored);
+  applyLive(settings);
+  panel.set(settings);
+
+  const table = await call('getScores');
+  if (Array.isArray(table)) scoreTable = table;
+}
+
+/* --------------------------------------------------------------------- game */
+
 function newGame(seed, nextMode) {
-  if (nextMode) mode = nextMode;
+  const cfg = settingsToConfig(settings);
   // The seed is chosen once per game and recorded, because a replay is a seed
   // plus an input log.
   game = makeGame({
     seed: seed === undefined ? (Date.now() >>> 0) : seed,
-    mode,
+    mode: nextMode || cfg.mode,
   });
+  setTiming(game, cfg.timing);
   resetHandling(handling);
+  setHandling(handling, cfg.handling);
   resetLoop(loop);
   resetPerf(perf);
   recorder = makeRecorder();
@@ -93,7 +187,7 @@ function newGame(seed, nextMode) {
 
 /** Focus loss pauses. The input adapter has already cleared the held keys. */
 function isPaused() {
-  return input.paused === true;
+  return input.paused === true || panel.isOpen();
 }
 
 /* ---------------------------------------------------------------- replays */
@@ -102,10 +196,9 @@ function isPaused() {
  * The run is over: close the log, build the replay, and check it reproduces.
  *
  * The verification re-runs the whole log, which is a few milliseconds — paid
- * once, on the frame the game ended, where a hitch cannot be felt. It is worth
- * paying every time: a replay that does not reproduce means something in the
- * simulation has become non-deterministic, and the only place that can be
- * noticed cheaply is here.
+ * once, on the frame the game ended, where a hitch cannot be felt. Worth paying
+ * every time: a replay that does not reproduce means something in the simulation
+ * has become non-deterministic, and this is the only cheap place to notice.
  */
 function finishRun() {
   runRecorded = true;
@@ -115,21 +208,33 @@ function finishRun() {
   const v = verifyReplay(lastReplay);
   const summary = 'replay: ' + lastReplay.ticks + ' ticks in ' +
     (lastReplay.log.length / 2) + ' pairs, score ' + v.score;
-  if (v.ok) {
-    report(summary + ' — verified');
-  } else {
-    report(summary + ' — DID NOT VERIFY (' + v.actual + ' vs ' + v.expected + ')');
-  }
+  report(v.ok ? summary + ' — verified'
+    : summary + ' — DID NOT VERIFY (' + v.actual + ' vs ' + v.expected + ')');
 
   const score = lastReplay.result ? lastReplay.result.score : 0;
+  // Captured before the write, so the overlay can distinguish beating the record
+  // from being the record.
+  priorBest = bestFor(lastReplay.mode);
   const best = bestReplay && bestReplay.result ? bestReplay.result.score : -1;
   if (score > best) bestReplay = lastReplay;
+
+  persistRun(lastReplay);
 }
 
-/** Watch the last run back. */
+/** Write the finished run to disk. Deliberately not awaited by the frame loop. */
+async function persistRun(replay) {
+  // An abandoned run is still watchable, it is just not a score.
+  const entry = scoreEntry(replay, Date.now());
+  if (entry) {
+    const table = await call('saveScore', { entry });
+    if (Array.isArray(table)) scoreTable = table;
+  }
+  await call('saveReplay', { replay });
+}
+
 function watchReplay(replay) {
   if (!replay) {
-    report('replay: nothing recorded yet');
+    report('replay: nothing to watch yet');
     return;
   }
   watch = startPlayback(replay);
@@ -139,10 +244,23 @@ function watchReplay(replay) {
   banner = '';
 }
 
-/** Race the session's best run alongside the live one. */
+/** Watch the best replay saved on disk, which exercises the storage round trip. */
+async function watchBestSaved() {
+  const list = await call('listReplays');
+  if (!Array.isArray(list) || !list.length) {
+    report('replay: nothing saved yet');
+    return;
+  }
+  const best = list.slice().sort((a, b) => b.score - a.score)[0];
+  const replay = await call('loadReplay', { id: best.id });
+  if (!replay) return;
+  report('replay: loading ' + best.id + ' (' + best.score + ')');
+  watchReplay(replay);
+}
+
 function toggleGhost() {
   if (ghost) { ghost = null; return; }
-  if (watch) return;                    // not while watching a replay
+  if (watch) return;                     // not while watching a replay
   if (!bestReplay) {
     report('ghost: no completed run to race yet');
     return;
@@ -170,7 +288,6 @@ function onFrame(now) {
     ticks = advance(loop, dt);
 
     if (ticks > 0 && watch) {
-      // Watching: the log drives the simulation instead of the keyboard.
       for (let i = 0; i < ticks && !watch.done; i++) {
         if (!playbackStep(watch)) watch.done = true;
       }
@@ -206,6 +323,7 @@ function onFrame(now) {
   flags.paused = isPaused();
   flags.watching = !!watch;
   flags.ghost = !!ghost;
+  flags.priorBest = priorBest;
 
   // The ghost's board is drawn dimly under the live one, so a race reads as one
   // stack behind another rather than two pictures to compare by eye.
@@ -227,10 +345,10 @@ function onFrame(now) {
  *
  * Without this an uncaught page error is *invisible*: `console.log` is not
  * forwarded from the page, so the game would simply stop animating with no
- * diagnostic anywhere. Worth having permanently, not just for debugging.
+ * diagnostic anywhere.
  */
 function report(msg) {
-  if (typeof tiny !== 'undefined' && tiny.api) {
+  if (hasBridge()) {
     tiny.api.call('log', { msg: 'error: ' + msg }).catch(() => {});
   }
 }
@@ -247,23 +365,35 @@ attachInput(input, window, null);
 
 /**
  * Lifecycle keys are handled here rather than in the game's key map: restarting,
- * choosing a mode and watching a replay are driver concerns, not input-handling
- * ones, and a keydown event is already an edge so it needs no latching.
- *
- * Number keys pick a mode. A proper menu belongs in Phase 5; this is the minimum
- * that makes the modes reachable.
+ * choosing a mode, opening settings and watching a replay are driver concerns,
+ * not input-handling ones, and a keydown event is already an edge so it needs no
+ * latching.
  */
 const MODE_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2 };
 
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
 
+  // While the panel is up, the only key the driver owns is the one that closes
+  // it. Everything else belongs to the controls.
+  if (panel.isOpen()) {
+    if (e.code === 'KeyO' || e.code === 'Escape') panel.close();
+    return;
+  }
+
+  if (e.code === 'KeyO') {
+    // Clear held keys before pausing, so nothing is still down on resume.
+    resetInput(input);
+    panel.open();
+    return;
+  }
   if (e.code === 'Escape') { watch = null; return; }
   if (e.code === 'KeyV') {
     if (watch) watch = null;
     else watchReplay(lastReplay);
     return;
   }
+  if (e.code === 'KeyB') { watchBestSaved(); return; }
   if (e.code === 'KeyG') { toggleGhost(); return; }
 
   const pick = MODE_KEYS[e.code];
@@ -277,6 +407,8 @@ window.addEventListener('keydown', (e) => {
   else if (e.code === 'KeyP') showPerf = !showPerf;
 });
 
+/* --------------------------------------------------------------------- boot */
+
 newGame();
 
 /**
@@ -284,59 +416,52 @@ newGame();
  * backend reports whether TETRIS_BENCH is set in the launcher's environment.
  */
 async function maybeBench() {
-  if (typeof tiny === 'undefined' || !tiny.api) return false;
-  let want = false;
-  try {
-    want = await tiny.api.call('bench');
-  } catch (err) {
-    return false;
-  }
+  if (!hasBridge()) return false;
+  const want = await call('bench');
   if (!want) return false;
 
   // Report *before* anything that can block. The activation below awaits a
   // timer, and a suspended timer in an occluded window never resolves — so
   // without this line a stalled bench run produces no output at all, and
   // "the page never loaded" and "the window was hidden" look identical.
-  await tiny.api.call('log', { msg: 'bench: page up, bench flag set' });
+  await call('log', { msg: 'bench: page up, bench flag set' });
 
   // The pacing half of the self-test needs a *visible* window: WebKit stops rAF
-  // when the window is occluded, so a launch that leaves the window behind
-  // another would stall. Bring it to the front first, then give it a moment to
-  // actually be on screen.
+  // when the window is occluded. Bring it to the front, then give it a moment.
   try {
     await tiny.win.show({ activate: true });
     await new Promise((r) => setTimeout(r, 400));
   } catch (err) {
-    await tiny.api.call('log', { msg: 'bench: could not activate the window: ' + err });
+    await call('log', { msg: 'bench: could not activate the window: ' + err });
   }
 
   // Which display this is running on decides how to read the pacing numbers —
   // and whether the 60 fps cap is in play at all — so record it rather than
   // guessing from the frame rate afterwards.
-  try {
-    const screens = await tiny.app.screens();
-    await tiny.api.call('log', { msg: 'bench: displays ' + JSON.stringify(screens) });
-  } catch (err) {
-    await tiny.api.call('log', { msg: 'bench: could not read displays: ' + err });
-  }
+  const screens = await call('app.screens');
+  await call('log', { msg: 'bench: displays ' + JSON.stringify(screens) });
 
-  // A failure here must still quit: otherwise the app hangs and reports
-  // nothing, which is exactly how a missing argument turned into a silent
-  // 40-second stall the first time this ran.
+  // A failure here must still quit: otherwise the app hangs and reports nothing,
+  // which is exactly how a missing argument turned into a silent 40-second stall.
   try {
     await runSelfTest({
       canvas,
       renderer,
       perf,
-      log: (m) => tiny.api.call('log', { msg: m }),
+      call,
+      log: (m) => call('log', { msg: m }),
     });
   } catch (err) {
-    await tiny.api.call('log', { msg: 'bench: self-test threw: ' + (err && err.message ? err.message : err) });
+    await call('log', { msg: 'bench: self-test threw: ' + (err && err.message ? err.message : err) });
   }
-  await tiny.api.call('quit');
+  await call('quit');
   return true;
 }
 
-maybeBench().then((benched) => {
-  if (!benched) requestAnimationFrame(onFrame);
-});
+async function boot() {
+  if (await maybeBench()) return;
+  await loadSettings();
+  requestAnimationFrame(onFrame);
+}
+
+boot();

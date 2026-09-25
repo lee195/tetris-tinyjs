@@ -21,6 +21,10 @@
 <!-- One canvas, not two: the well and the side panel share it, so there is one
      backing store to keep in sync with devicePixelRatio rather than two. -->
 <canvas id="game"></canvas>
+<!-- The settings overlay is the only DOM beyond the canvas. It is built by
+     js/panel.js and hidden until opened; see the note there on why the game
+     pauses while it is up. -->
+<div id="settings" class="set-panel" role="dialog" aria-label="Settings"></div>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

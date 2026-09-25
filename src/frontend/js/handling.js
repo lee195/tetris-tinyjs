@@ -125,6 +125,36 @@ export function setHandling(h, config) {
   return h.cfg;
 }
 
+/**
+ * The config as JSON-safe data.
+ *
+ * `sdf` defaults to `Infinity`, and JSON has no Infinity: `JSON.stringify` turns
+ * it into `null`, which on the way back would mean *one cell per frame* rather
+ * than instant. That is a silent behaviour change rather than an error, so the
+ * encoding is explicit and lives in one place — both the settings file and the
+ * replay header go through here.
+ */
+export function encodeHandling(config) {
+  const c = normalizeConfig(config);
+  return {
+    das: c.das,
+    arr: c.arr,
+    sdf: c.sdf === Infinity ? null : c.sdf,
+    dcd: c.dcd,
+  };
+}
+
+/** The inverse of `encodeHandling`. Tolerates partial or missing data. */
+export function decodeHandling(data) {
+  const d = data || {};
+  return normalizeConfig({
+    das: d.das,
+    arr: d.arr,
+    sdf: d.sdf === null ? Infinity : d.sdf,
+    dcd: d.dcd,
+  });
+}
+
 function clearIntent(it) {
   it.shift = 0;
   it.toWall = false;

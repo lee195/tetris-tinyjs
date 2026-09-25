@@ -35,6 +35,8 @@ import { stepWithInput } from './apply.js';
 import { makeLoop, advance } from './loop.js';
 import { draw, boardCellX, boardCellY, BASE } from './render.js';
 import { makePerf, recordFrame, stats, resetPerf, meetsBudget } from './perf.js';
+import { makeRecorder, recordTick, finishRecording, buildReplay } from './replay.js';
+import { normalizeSettings } from './settings.js';
 
 const WELL_BG = [0x11, 0x14, 0x19];
 const PAGE_BG = [0x0b, 0x0d, 0x11];
@@ -296,6 +298,94 @@ function measurePacing(deps, seconds) {
   });
 }
 
+/* ------------------------------------------------------------- storage checks */
+
+/**
+ * A minimal but *real* replay, built from an actual short run rather than
+ * hand-written. A hand-written one would only prove the backend accepts the
+ * shape I imagined.
+ */
+function probeReplay() {
+  const g = makeGame({ seed: 2024 });
+  const h = makeHandling({ das: 4, arr: 2, sdf: Infinity, dcd: 0 });
+  const f = makeInputFrame();
+  const rec = makeRecorder();
+  for (let i = 0; i < 120; i++) {
+    if (i === 10) f.hardEdge = true;
+    if (i === 40) { f.right = true; f.rightEdge = true; }
+    recordTick(rec, f);
+    stepWithInput(g, h, f);
+    f.hardEdge = false;
+    if (g.status === STATUS.OVER) break;
+  }
+  finishRecording(rec);
+  return buildReplay(g, h.cfg, rec.pairs);
+}
+
+/**
+ * Round-trip every persistence method against the real backend.
+ *
+ * This is the only way to check a file-writing layer that has no UI for all of
+ * it, and it is worth doing: the interesting failure is not "the file is
+ * missing" but "the id the page sent back became a path somewhere else".
+ *
+ * Everything it writes, it removes or restores.
+ */
+async function checkStorage(deps, report) {
+  const { call } = deps;
+
+  // Settings, saved and restored — the user's real settings must survive.
+  const before = await call('getSettings');
+  await call('saveSettings', {
+    settings: { v: 1, mode: 'sprint', handling: { das: 7 }, timing: { are: 3 } },
+  });
+  const after = await call('getSettings');
+  report.check('settings round-trip through disk',
+    !!after && after.mode === 'sprint' && after.handling && after.handling.das === 7,
+    after ? JSON.stringify(after.handling) : 'null');
+  await call('saveSettings', { settings: before || normalizeSettings(null) });
+
+  // A score entry.
+  const table = await call('saveScore', {
+    entry: { mode: 'selftest', score: 1, lines: 1, ticks: 1, reason: 'goal', date: 0 },
+  });
+  report.check('saveScore returns the table',
+    Array.isArray(table) && table.some((e) => e.mode === 'selftest'),
+    Array.isArray(table) ? table.length + ' entries' : 'null');
+  report.check('a malformed score is refused',
+    (await call('saveScore', { entry: { mode: 'x', score: 'lots' } })) === null,
+    'rejected');
+
+  // Replays: save, list, load, delete.
+  const saved = await call('saveReplay', { replay: probeReplay() });
+  report.check('saveReplay returns an index entry',
+    !!saved && typeof saved.id === 'string', saved ? saved.id : 'null');
+
+  if (saved) {
+    const list = await call('listReplays');
+    report.check('the saved replay is listed',
+      Array.isArray(list) && list.some((m) => m.id === saved.id),
+      Array.isArray(list) ? list.length + ' replays' : 'null');
+
+    const loaded = await call('loadReplay', { id: saved.id });
+    report.check('loadReplay returns the log intact',
+      !!loaded && Array.isArray(loaded.log) && loaded.log.length > 0,
+      loaded ? loaded.log.length + ' log entries' : 'null');
+
+    // The id becomes a filename, so a traversal attempt must be refused rather
+    // than merely sanitised.
+    report.check('a path-traversal id is refused',
+      (await call('loadReplay', { id: '../settings' })) === null, 'rejected');
+
+    await call('deleteReplay', { id: saved.id });
+    const after2 = await call('listReplays');
+    report.check('deleteReplay removes it from the index',
+      Array.isArray(after2) && !after2.some((m) => m.id === saved.id), 'gone');
+    report.check('and the file is really gone',
+      (await call('loadReplay', { id: saved.id })) === null, 'gone');
+  }
+}
+
 /* --------------------------------------------------------------------- entry */
 
 export async function runSelfTest(deps) {
@@ -303,7 +393,7 @@ export async function runSelfTest(deps) {
   // surfaces as "undefined is not an object" thrown from inside a rAF callback,
   // which kills the frame loop — and that looks exactly like an occluded window,
   // so the wrong diagnosis is the easy one to reach.
-  for (const key of ['canvas', 'renderer', 'perf', 'log']) {
+  for (const key of ['canvas', 'renderer', 'perf', 'log', 'call']) {
     if (!deps[key]) throw new Error('selftest: deps.' + key + ' is missing');
   }
 
@@ -319,6 +409,11 @@ export async function runSelfTest(deps) {
 
   log('bench: render checks');
   checkRender(deps, report);
+  for (const l of lines) log(l);
+  lines.length = 0;
+
+  log('bench: persistence round trip');
+  await checkStorage(deps, report);
   for (const l of lines) log(l);
   lines.length = 0;
 

@@ -22,7 +22,7 @@ import {
   REPLAY_VERSION, packFrame, unpackFrame, makeRecorder, recordTick,
   finishRecording, makePlayer, nextFrame, logTicks, buildReplay,
   handlingFromReplay, startPlayback, playbackStep, verifyReplay,
-  serializeReplay, deserializeReplay,
+  serializeReplay, deserializeReplay, scoreEntry,
 } from '../src/frontend/js/replay.js';
 import { ok, eq, group, done } from './harness.mjs';
 
@@ -369,6 +369,46 @@ group('serialization');
   const replay = buildReplay(run.game, run.handling.cfg, run.rec.pairs);
   eq(replay.result, null, 'so it records no result');
   ok(verifyReplay(replay).ok, 'but it still verifies');
+}
+
+/* ------------------------------------------------------------ high scores */
+
+group('the high-score entry');
+
+{
+  // The backend validates every field of this object, so a field of the wrong
+  // type is a *rejected save* rather than a wrong number on a board. Worth
+  // pinning here, where it can be seen, instead of only in the webview.
+  const done = driveRun({
+    seed: 55, mode: 'ultra', handlingCfg: CFG, frames: 7600, ticksPerFrame: 1,
+  });
+  eq(done.game.status, STATUS.OVER, 'the run ended');
+  const replay = buildReplay(done.game, done.handling.cfg, done.rec.pairs);
+  const entry = scoreEntry(replay, 1234567);
+
+  ok(entry, 'a finished run produces a score entry');
+  eq(entry.mode, 'ultra', 'with the mode');
+  eq(entry.score, replay.result.score, 'the score');
+  eq(entry.lines, replay.result.lines, 'the line count');
+  eq(entry.ticks, replay.result.ticks, 'the tick count');
+  eq(entry.reason, replay.result.reason, 'and the ending reason');
+  eq(entry.date, 1234567, 'and the date it was handed, not a clock read here');
+
+  let allFinite = true;
+  for (const k of ['score', 'lines', 'ticks', 'date']) {
+    if (!Number.isFinite(entry[k])) allFinite = false;
+  }
+  ok(allFinite, 'every numeric field is a finite number');
+  ok(typeof entry.mode === 'string' && typeof entry.reason === 'string',
+    'and the string fields are strings');
+
+  // An abandoned run is watchable; it is just not a score.
+  const going = driveRun({
+    seed: 3, mode: 'marathon', handlingCfg: CFG, frames: 200, ticksPerFrame: 1,
+  });
+  ok(going.game.status !== STATUS.OVER, 'the short run is still going');
+  eq(scoreEntry(buildReplay(going.game, going.handling.cfg, going.rec.pairs), 1), null,
+    'so it produces no score entry');
 }
 
 /* ------------------------------------------------------------- compression */

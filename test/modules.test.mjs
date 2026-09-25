@@ -34,7 +34,7 @@ import { ok, group, done } from './harness.mjs';
 const MODULES = [
   'constants', 'rng', 'pieces', 'board', 'rules', 'game', 'loop',
   'handling', 'apply', 'input', 'render', 'perf', 'scoring', 'modes',
-  'replay', 'selftest',
+  'replay', 'settings', 'panel', 'selftest',
 ];
 
 const MAIN_PATH = fileURLToPath(new URL('../src/frontend/js/main.js', import.meta.url));

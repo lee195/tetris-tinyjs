@@ -15,7 +15,15 @@
       "win.show",
       "win.setPosition",
       "win.getState",
-      "app.screens"
+      "app.screens",
+      "getSettings",
+      "saveSettings",
+      "getScores",
+      "saveScore",
+      "listReplays",
+      "saveReplay",
+      "loadReplay",
+      "deleteReplay"
     ]
   }
 }

@@ -317,8 +317,8 @@ export function draw(r, game, flags, ghost) {
 
   drawPanel(ctx, L, game, flags);
   if (flags && flags.banner) drawBanner(ctx, L, flags.banner);
-  if (flags && flags.over) drawOverlay(ctx, L, game);
-  else if (flags && flags.paused) drawOverlay(ctx, L, null);
+  if (flags && flags.over) drawOverlay(ctx, L, game, flags);
+  else if (flags && flags.paused) drawOverlay(ctx, L, null, flags);
 
   r.drawMs = performance.now() - t0;
 }
@@ -431,7 +431,7 @@ function stat(ctx, label, value, x, y, labelSize, valueSize, labelFont, valueFon
   text(ctx, String(value), x, y + labelSize + valueSize, VALUE, valueFont);
 }
 
-function drawOverlay(ctx, L, game) {
+function drawOverlay(ctx, L, game, flags) {
   const cx = L.boardX + L.boardW / 2;
   const cy = L.boardY + L.boardH / 2;
   ctx.fillStyle = 'rgba(8, 10, 14, 0.78)';
@@ -446,7 +446,7 @@ function drawOverlay(ctx, L, game) {
   // game === null means paused rather than finished.
   if (!game) {
     text(ctx, 'PAUSED', cx, cy, '#eef2f7', titleFont);
-    text(ctx, 'focus to resume', cx, cy + titleSize, LABEL, bodyFont);
+    text(ctx, 'O to open settings', cx, cy + titleSize, LABEL, bodyFont);
     ctx.textAlign = 'left';
     return;
   }
@@ -466,8 +466,23 @@ function drawOverlay(ctx, L, game) {
     text(ctx, 'SCORE ' + r.score, cx, y, VALUE, bodyFont);
     y += lh;
     text(ctx, r.lines + ' LINES   LEVEL ' + r.level, cx, y, VALUE, bodyFont);
-    y += Math.round(lh * 1.7);
+
+    // The stored best for this mode *before* this run, so "you beat the record"
+    // and "this is the record" are distinguishable. Comparing against the live
+    // table instead would call every best run a new best, since by the time the
+    // overlay draws the save may already have landed.
+    const prior = flags ? flags.priorBest : 0;
+    const isBest = r.score > prior && r.score > 0;
+    if (isBest || prior > 0) {
+      y += lh;
+      text(ctx, isBest ? 'NEW BEST' : 'BEST ' + prior, cx, y,
+        isBest ? '#8ce9a8' : LABEL, bodyFont);
+    }
+
+    y += Math.round(lh * 1.5);
     text(ctx, 'Enter to play again', cx, y, LABEL, bodyFont);
+    y += Math.round(lh * 0.95);
+    text(ctx, 'V watch · B best · G ghost · O settings', cx, y, LABEL, bodyFont);
   }
   ctx.textAlign = 'left';
 }

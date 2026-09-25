@@ -34,7 +34,7 @@
  */
 
 import { makeGame, step, gameHash, setTiming, STATUS } from './game.js';
-import { makeHandling, makeInputFrame } from './handling.js';
+import { makeHandling, makeInputFrame, encodeHandling, decodeHandling } from './handling.js';
 import { stepWithInput } from './apply.js';
 
 /** Bump only when the *encoding* changes, not when the game rules change. */
@@ -167,15 +167,15 @@ export function buildReplay(game, handlingCfg, pairs) {
     cfg: {
       are: game.are,
       lineClearDelay: game.lineClearDelay,
-      handling: {
-        das: handlingCfg.das,
-        arr: handlingCfg.arr,
-        // JSON has no Infinity, and `sdf` defaults to it. Encoded as null.
-        sdf: handlingCfg.sdf === Infinity ? null : handlingCfg.sdf,
-        dcd: handlingCfg.dcd,
-      },
+      // Through the shared encoder, so `sdf: Infinity` cannot become 1 on the
+      // way back out of JSON. See encodeHandling.
+      handling: encodeHandling(handlingCfg),
     },
     ticks: game.ticks,
+    // Copied field by field rather than spread, so that adding a field to the
+    // result is a deliberate act. `ticks` was missing here, which made every
+    // saved high-score entry record zero ticks — the backend coerces a
+    // non-finite number to 0 rather than rejecting it, so nothing complained.
     result: game.result
       ? {
         reason: game.result.reason,
@@ -183,6 +183,7 @@ export function buildReplay(game, handlingCfg, pairs) {
         score: game.result.score,
         pieces: game.result.pieces,
         level: game.result.level,
+        ticks: game.result.ticks,
       }
       : null,
     /** The final state, for verification. */
@@ -191,15 +192,30 @@ export function buildReplay(game, handlingCfg, pairs) {
   };
 }
 
+/**
+ * The high-score entry for a finished run, or null if it never ended.
+ *
+ * Extracted from the driver so the shape is testable: the backend validates
+ * every field of this object, and a field that is the wrong type is a rejected
+ * save rather than a wrong number. `date` is passed in rather than read here,
+ * because this module must not consult a clock.
+ */
+export function scoreEntry(replay, date) {
+  const r = replay.result;
+  if (!r) return null;
+  return {
+    mode: replay.mode,
+    score: r.score,
+    lines: r.lines,
+    ticks: r.ticks,
+    reason: r.reason,
+    date: date || 0,
+  };
+}
+
 /** Undo the `sdf: null` encoding from `buildReplay`. */
 export function handlingFromReplay(replay) {
-  const h = replay.cfg.handling;
-  return {
-    das: h.das,
-    arr: h.arr,
-    sdf: h.sdf === null ? Infinity : h.sdf,
-    dcd: h.dcd,
-  };
+  return decodeHandling(replay.cfg.handling);
 }
 
 /**
