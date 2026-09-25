@@ -29,6 +29,7 @@ import { COLS, TOTAL_ROWS, VISIBLE_TOP, PIECE } from './constants.js';
 import { setCell } from './board.js';
 import { SHAPES } from './pieces.js';
 import { makeGame, step, ghostRow, STATUS } from './game.js';
+import { MODE } from './modes.js';
 import { makeHandling, makeInputFrame } from './handling.js';
 import { stepWithInput } from './apply.js';
 import { makeLoop, advance } from './loop.js';
@@ -166,6 +167,28 @@ function checkRender(deps, report) {
     boardCellY(L, TOTAL_ROWS) + 3, dpr);
   report.check('nothing is drawn below the last row',
     near(belowFloor, PAGE_BG), show(belowFloor));
+
+  // 9. The end-of-run overlay, with a real result. This is the only part of the
+  //    panel code the headless tests cannot reach, and it reads `game.result`,
+  //    which only exists once a run has ended.
+  const over = makeGame({ seed: 3, mode: MODE.SPRINT });
+  step(over);
+  over.status = STATUS.OVER;
+  over.result = {
+    mode: 'sprint', reason: 'goal', lines: 40, score: 12345,
+    pieces: 61, level: 8, ticks: 3600,
+  };
+  draw(renderer, over, { paused: false, over: true, banner: '' });
+
+  const img2 = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const dim = at(img2, cellCentre(L, 1, VISIBLE_TOP + 1)[0],
+    cellCentre(L, 1, VISIBLE_TOP + 1)[1], dpr);
+  report.check('the end-of-run overlay darkens the well',
+    dim[0] < 40 && dim[1] < 40 && dim[2] < 50, show(dim));
+
+  // 10. And the paused overlay must not throw on a null result.
+  draw(renderer, g, { paused: true, over: false, banner: '' });
+  report.check('the paused overlay draws without a result', true, 'no exception');
 }
 
 /* ------------------------------------------------------------ pacing checks */

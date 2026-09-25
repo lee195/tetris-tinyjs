@@ -36,6 +36,16 @@ export function getCell(board, x, y) {
   return (board.rows[y] & (1 << x)) !== 0;
 }
 
+/**
+ * Set or clear one cell.
+ *
+ * **Clearing a cell does not repair the `top` cache.** Raising a column is O(1)
+ * and done here; lowering it would need a scan of the whole column. The only
+ * code that removes cells is `clearLines`, which recomputes — so the cache is
+ * always correct in play. But hand-built test boards must call `recomputeTop`
+ * after clearing cells, or `dropRow` will use a stale height and drop a piece
+ * into the wrong row.
+ */
 export function setCell(board, x, y, color) {
   if (color) {
     board.rows[y] |= 1 << x;
@@ -148,5 +158,21 @@ export function boardHash(board) {
 /** True when every column is empty — used for perfect-clear detection. */
 export function isEmpty(board) {
   for (let x = 0; x < COLS; x++) if (board.top[x] !== TOTAL_ROWS) return false;
+  return true;
+}
+
+/**
+ * Would the board be empty once the full rows are removed?
+ *
+ * Every row must be either completely empty or completely full. Needed because
+ * scoring happens at lock time, while the rows are still on the board — the
+ * clear itself waits out the line-clear delay. Checking `isEmpty` there would
+ * always report false.
+ */
+export function isPerfectClear(board) {
+  for (let y = 0; y < TOTAL_ROWS; y++) {
+    const mask = board.rows[y];
+    if (mask !== 0 && mask !== FULL_ROW) return false;
+  }
   return true;
 }

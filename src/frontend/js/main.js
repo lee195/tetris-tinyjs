@@ -17,7 +17,8 @@
  */
 
 import { TICK_MS } from './constants.js';
-import { makeGame, STATUS, setLevel } from './game.js';
+import { makeGame, STATUS } from './game.js';
+import { MODE, MODE_LIST } from './modes.js';
 import { makeHandling, makeInputFrame, resetHandling, DEFAULT_HANDLING } from './handling.js';
 import { makeInput, attachInput, pollInput } from './input.js';
 import { stepWithInput } from './apply.js';
@@ -26,8 +27,8 @@ import { makeRenderer, draw } from './render.js';
 import { makePerf, recordFrame, stats, resetPerf, drawPerf } from './perf.js';
 import { runSelfTest } from './selftest.js';
 
-/** Lines per level. Provisional — the real curve is Phase 4's scoring work. */
-const LINES_PER_LEVEL = 10;
+/** How long a "TETRIS" / "T-SPIN DOUBLE" callout stays on screen, in ticks. */
+const BANNER_TICKS = 66;
 
 const canvas = document.getElementById('game');
 const renderer = makeRenderer(canvas);
@@ -39,18 +40,30 @@ const frame = makeInputFrame();
 const handling = makeHandling(DEFAULT_HANDLING);
 
 /** Reused, never rebuilt — the draw call must not allocate. */
-const flags = { paused: false, over: false };
+const flags = { paused: false, over: false, banner: '' };
 
 let game;
 let showPerf = false;
+let mode = MODE.MARATHON;
+/** Identity of the last clear we showed a banner for, and when to stop. */
+let seenClear = null;
+let banner = '';
+let bannerUntil = 0;
 
-function newGame(seed) {
+function newGame(seed, nextMode) {
+  if (nextMode) mode = nextMode;
   // The seed is chosen once per game and kept on the state, because a replay is
   // a seed plus an input log — Phase 4 records it.
-  game = makeGame({ seed: seed === undefined ? (Date.now() >>> 0) : seed });
+  game = makeGame({
+    seed: seed === undefined ? (Date.now() >>> 0) : seed,
+    mode,
+  });
   resetHandling(handling);
   resetLoop(loop);
   resetPerf(perf);
+  seenClear = null;
+  banner = '';
+  bannerUntil = 0;
 }
 
 /** Focus loss pauses. The input adapter has already cleared the held keys. */
@@ -86,10 +99,21 @@ function onFrame(now) {
 
   flags.over = game.status === STATUS.OVER;
 
-  // Provisional level curve, so the renderer has something to show and the game
-  // can be played at speed. Phase 4 replaces this with real scoring.
-  const wantLevel = 1 + Math.floor(game.lines / LINES_PER_LEVEL);
-  if (wantLevel !== game.level) setLevel(game, wantLevel);
+  // The level curve lives in the simulation now, not here — it changes gravity,
+  // so a replay would diverge if the driver owned it.
+  flags.over = game.status === STATUS.OVER;
+
+  // The clear callout. `lastClear` is a fresh object per lock, so identity is
+  // the signal; comparing values would need a tick stamp in the sim, which is
+  // presentation state that does not belong there.
+  if (game.lastClear && game.lastClear !== seenClear) {
+    seenClear = game.lastClear;
+    banner = game.lastClear.label;
+    if (game.lastClear.b2bApplied) banner = 'B2B ' + banner;
+    if (game.lastClear.combo > 0) banner += '  +' + game.lastClear.combo + ' COMBO';
+    bannerUntil = game.ticks + BANNER_TICKS;
+  }
+  flags.banner = game.ticks < bannerUntil ? banner : '';
 
   flags.paused = isPaused();
   draw(renderer, game, flags);
@@ -128,11 +152,25 @@ window.addEventListener('unhandledrejection', (e) => {
 
 attachInput(input, window, null);
 
-// Game lifecycle keys are handled here rather than in the game's key map:
-// restarting is a driver concern, not an input-handling one, and a keydown
-// event is already an edge so it needs no latching.
+/**
+ * Lifecycle keys are handled here rather than in the game's key map: restarting
+ * and choosing a mode are driver concerns, not input-handling ones, and a
+ * keydown event is already an edge so it needs no latching.
+ *
+ * Number keys pick a mode and start it immediately. A proper menu belongs in
+ * Phase 5; this is the minimum that makes the modes reachable.
+ */
+const MODE_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2 };
+
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  const pick = MODE_KEYS[e.code];
+  if (pick !== undefined && MODE_LIST[pick]) {
+    newGame(undefined, MODE_LIST[pick]);
+    return;
+  }
+
   if (e.code === 'Enter' && game.status === STATUS.OVER) newGame();
   else if (e.code === 'KeyR') newGame();
   else if (e.code === 'KeyP') showPerf = !showPerf;

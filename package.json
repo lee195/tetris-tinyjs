@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/sim.test.mjs && node test/handling.test.mjs && node test/render.test.mjs"
+    "test": "node test/sim.test.mjs && node test/handling.test.mjs && node test/render.test.mjs && node test/scoring.test.mjs"
   }
 }

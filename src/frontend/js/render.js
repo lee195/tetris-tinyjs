@@ -25,7 +25,8 @@ import {
   COLS, TOTAL_ROWS, VISIBLE_ROWS, VISIBLE_TOP, PIECE_COUNT,
 } from './constants.js';
 import { SHAPES, BOUNDS } from './pieces.js';
-import { ghostRow, STATUS } from './game.js';
+import { ghostRow, STATUS, ENDING } from './game.js';
+import { formatTicks, ticksRemaining } from './modes.js';
 
 /* ------------------------------------------------------------------ palette */
 
@@ -285,10 +286,31 @@ export function draw(r, game, flags) {
   ctx.strokeRect(L.boardX - 0.5, L.boardY - 0.5, L.boardW + 1, L.boardH + 1);
 
   drawPanel(ctx, L, game);
-  if (flags && flags.over) drawOverlay(ctx, L, 'GAME OVER', 'press Enter');
-  else if (flags && flags.paused) drawOverlay(ctx, L, 'PAUSED', 'focus to resume');
+  if (flags && flags.banner) drawBanner(ctx, L, flags.banner);
+  if (flags && flags.over) drawOverlay(ctx, L, game);
+  else if (flags && flags.paused) drawOverlay(ctx, L, null);
 
   r.drawMs = performance.now() - t0;
+}
+
+/**
+ * The transient "TETRIS" / "T-SPIN DOUBLE" / "B2B" callout, near the top of the
+ * well so it never covers the stack the player is reading.
+ */
+function drawBanner(ctx, L, text) {
+  const size = Math.max(11, Math.round(L.cell * 0.62));
+  ctx.textAlign = 'center';
+  const y = L.boardY + Math.round(L.cell * 1.8);
+  const cx = L.boardX + L.boardW / 2;
+  const font = '700 ' + size + 'px ui-monospace, monospace';
+  // A dark copy one pixel down, so the callout stays readable over any colour
+  // of block it happens to land on.
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.font = font;
+  ctx.fillText(text, cx + 1, y + 1);
+  ctx.fillStyle = '#f2f6fb';
+  ctx.fillText(text, cx, y);
+  ctx.textAlign = 'left';
 }
 
 /* -------------------------------------------------------------------- panel */
@@ -301,25 +323,38 @@ function drawPanel(ctx, L, game) {
   const valueSize = Math.max(12, Math.round(cell * 0.8));
   const labelFont = '600 ' + labelSize + 'px ui-monospace, monospace';
   const valueFont = '600 ' + valueSize + 'px ui-monospace, monospace';
+  const mode = game.mode;
 
-  const mini = Math.max(3, Math.round(cell * 0.52));
+  const mini = Math.max(3, Math.round(cell * 0.45));
   const boxH = mini * 3 + 8;
 
   let y = L.panelY;
 
+  // Mode, and the clock for the modes that are timed. The clock is derived from
+  // the simulation's tick count, so it can never disagree with the game state.
+  text(ctx, mode.label.toUpperCase(), x, y + labelSize, LABEL, labelFont);
+  y += Math.round(cell * 0.6);
+  if (mode.showClock) {
+    const shown = mode.timeLimitTicks
+      ? ticksRemaining(mode, game.ticks)
+      : game.ticks;
+    text(ctx, formatTicks(shown), x, y + valueSize, VALUE, valueFont);
+    y += Math.round(cell * 0.95);
+  }
+
   // Hold
   text(ctx, 'HOLD', x, y + labelSize, LABEL, labelFont);
-  y += Math.round(cell * 0.6);
+  y += Math.round(cell * 0.55);
   box(ctx, L, x, y, w, boxH);
   if (game.hold >= 0) {
     const o = pieceBoxOrigin(game.hold, 0, mini, x, y, w, boxH);
     drawMini(ctx, SHAPES[game.hold][0], o.x, o.y, mini, game.hold, game.holdUsed);
   }
-  y += boxH + Math.round(cell * 0.5);
+  y += boxH + Math.round(cell * 0.4);
 
   // Next queue
   text(ctx, 'NEXT', x, y + labelSize, LABEL, labelFont);
-  y += Math.round(cell * 0.6);
+  y += Math.round(cell * 0.55);
   const n = Math.min(game.queue.length, 5);
   for (let i = 0; i < n; i++) {
     const piece = game.queue[i];
@@ -361,15 +396,44 @@ function stat(ctx, label, value, x, y, labelSize, valueSize, labelFont, valueFon
   text(ctx, String(value), x, y + labelSize + valueSize, VALUE, valueFont);
 }
 
-function drawOverlay(ctx, L, title, hint) {
+function drawOverlay(ctx, L, game) {
   const cx = L.boardX + L.boardW / 2;
   const cy = L.boardY + L.boardH / 2;
-  ctx.fillStyle = 'rgba(8, 10, 14, 0.72)';
+  ctx.fillStyle = 'rgba(8, 10, 14, 0.78)';
   ctx.fillRect(L.boardX, L.boardY, L.boardW, L.boardH);
   ctx.textAlign = 'center';
-  text(ctx, title, cx, cy, '#eef2f7', '700 ' + Math.max(14, Math.round(L.cell * 1.1)) + 'px ui-monospace, monospace');
-  text(ctx, hint, cx, cy + Math.round(L.cell * 1.6), LABEL,
-    '500 ' + Math.max(10, Math.round(L.cell * 0.5)) + 'px ui-monospace, monospace');
+
+  const titleSize = Math.max(14, Math.round(L.cell * 1.05));
+  const bodySize = Math.max(10, Math.round(L.cell * 0.48));
+  const titleFont = '700 ' + titleSize + 'px ui-monospace, monospace';
+  const bodyFont = '500 ' + bodySize + 'px ui-monospace, monospace';
+
+  // game === null means paused rather than finished.
+  if (!game) {
+    text(ctx, 'PAUSED', cx, cy, '#eef2f7', titleFont);
+    text(ctx, 'focus to resume', cx, cy + titleSize, LABEL, bodyFont);
+    ctx.textAlign = 'left';
+    return;
+  }
+
+  const r = game.result;
+  let title = 'GAME OVER';
+  if (r && r.reason === ENDING.GOAL) title = 'COMPLETE';
+  else if (r && r.reason === ENDING.TIME) title = 'TIME';
+
+  text(ctx, title, cx, cy - titleSize * 0.7, '#eef2f7', titleFont);
+
+  if (r) {
+    const lh = Math.round(bodySize * 1.8);
+    let y = cy + Math.round(titleSize * 0.4);
+    text(ctx, r.mode.toUpperCase() + '   ' + formatTicks(r.ticks), cx, y, VALUE, bodyFont);
+    y += lh;
+    text(ctx, 'SCORE ' + r.score, cx, y, VALUE, bodyFont);
+    y += lh;
+    text(ctx, r.lines + ' LINES   LEVEL ' + r.level, cx, y, VALUE, bodyFont);
+    y += Math.round(lh * 1.7);
+    text(ctx, 'Enter to play again', cx, y, LABEL, bodyFont);
+  }
   ctx.textAlign = 'left';
 }
 
