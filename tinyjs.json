@@ -9,16 +9,10 @@
   "api": {
     "disable": ["*"],
     "enable": [
-      "ping",
-      "quit",
       "log",
-      "sysinfo",
-      "listDir",
-      "readFileHead",
-      "dialog.*",
-      "menu.set",
-      "win.setTitle",
-      "win.setSize",
+      "quit",
+      "bench",
+      "win.show",
       "win.setPosition",
       "win.getState",
       "app.screens"
