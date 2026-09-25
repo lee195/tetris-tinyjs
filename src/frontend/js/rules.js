@@ -32,9 +32,27 @@ export const ROTATE_RESET_LIMIT = 15;
  */
 export const SHARE_RESET_BUDGET = false;
 
-/** Frames of line-clear delay and spawn delay (ARE). */
-export const LINE_CLEAR_DELAY = 20;
-export const SPAWN_DELAY = 10;
+/**
+ * Line-clear delay and ARE (the appearance delay before the next piece), in
+ * ticks.
+ *
+ * **Both default to 0, and that is a correction.** They started at 20 and 10 —
+ * classic console-Tetris values — which cost **200 ms of dead time after every
+ * placement and 550 ms after a line clear**, during which input does nothing at
+ * all. That is not a subtle tuning preference; it is the largest single
+ * contributor to how responsive the game feels, and it reads as input delay
+ * because it *is* input delay. It was measured, not guessed: see the
+ * `dead time after a lock` test.
+ *
+ * At 0 the next piece is active on the tick after the lock, which is the
+ * minimum possible — the lock and the spawn cannot share a tick.
+ *
+ * Kept configurable rather than hardcoded because legibility is a real
+ * preference: raising `lineClearDelay` makes a clear read as a beat instead of
+ * a jump, and some players want that. See `setTiming()` in game.js.
+ */
+export const LINE_CLEAR_DELAY_DEFAULT = 0;
+export const ARE_DEFAULT = 0;
 
 /**
  * Guideline gravity: seconds-per-cell is (0.8 - (level-1)*0.007)^(level-1).

@@ -165,6 +165,16 @@ async function maybeBench() {
     await tiny.api.call('log', { msg: 'bench: could not activate the window: ' + err });
   }
 
+  // Which display this is running on decides how to read the pacing numbers —
+  // and whether the 60 fps cap is in play at all — so record it rather than
+  // guessing from the frame rate afterwards.
+  try {
+    const screens = await tiny.app.screens();
+    await tiny.api.call('log', { msg: 'bench: displays ' + JSON.stringify(screens) });
+  } catch (err) {
+    await tiny.api.call('log', { msg: 'bench: could not read displays: ' + err });
+  }
+
   // A failure here must still quit: otherwise the app hangs and reports
   // nothing, which is exactly how a missing argument turned into a silent
   // 40-second stall the first time this ran.

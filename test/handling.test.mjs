@@ -13,11 +13,13 @@
  * listener wiring — needs a webview.
  */
 
-import { COLS, SPAWN_X } from '../src/frontend/js/constants.js';
+import { COLS, TOTAL_ROWS, SPAWN_X, PIECE } from '../src/frontend/js/constants.js';
 import { BOUNDS } from '../src/frontend/js/pieces.js';
+import { setCell, recomputeTop } from '../src/frontend/js/board.js';
 import { makeRng } from '../src/frontend/js/rng.js';
 import {
-  makeGame, step, move, softDrop, ghostRow, gameHash, STATUS, spendReset,
+  makeGame, step, move, softDrop, hardDrop, ghostRow, gameHash, STATUS,
+  spendReset, setTiming,
 } from '../src/frontend/js/game.js';
 import {
   makeHandling, makeIntent, makeInputFrame, tick, onLock, shiftBlocked,
@@ -494,18 +496,20 @@ group('driving the simulation');
   ok(h.charged, 'DAS is charged');
   ok(g.x > SPAWN_X, 'and the piece has moved');
 
+  // With ARE 0 the next piece spawns on the same tick as the lock, so
+  // `piece === -1` is no longer observable from outside a step. The spawn
+  // counter is the honest signal that the lock happened.
+  const before = g.pieces;
   const drop = holding(1);
   drop.hardEdge = true;
   stepWithInput(g, h, drop);
-  eq(g.piece, -1, 'the hard drop locked the piece');
+  eq(g.pieces, before + 1, 'the hard drop locked the piece and the next one spawned');
+  ok(g.piece !== -1, 'and a piece is active');
   ok(h.charged, 'the charge survived the lock');
 
-  let guard = 0;
-  while (g.piece === -1 && guard++ < 60) stepWithInput(g, h, f);
-  ok(g.piece !== -1, 'a new piece spawned');
   const x0 = g.x;
   for (let i = 0; i < 3; i++) stepWithInput(g, h, f);
-  ok(g.x > x0, 'and it moved right with no fresh press');
+  ok(g.x > x0, 'and the new piece moved right with no fresh press');
 }
 
 {
@@ -565,6 +569,102 @@ group('driving the simulation');
   f.softDrop = true;
   stepWithInput(g, h, f);
   eq(g.y, y0 + 1, 'soft drop moves exactly one cell per tick');
+}
+
+/* ------------------------------------------------ lock-to-controllable delay */
+
+group('dead time after a lock (the ARE)');
+
+{
+  /**
+   * Ticks from a lock until a held direction actually moves the piece — the
+   * dead time a player feels, and the number this whole project is premised on.
+   *
+   * A regression guard with a specific history. ARE and the line-clear delay
+   * started at 10 and 20 frames, which measured **200 ms after every placement
+   * and 550 ms after a line clear**, during which input did nothing at all. A
+   * player reported it as "a slight delay after placing a piece... feels like
+   * input delay", and it was. These assertions are what makes that a fixed
+   * number rather than a feeling.
+   */
+  function deadTicks(setup) {
+    const g = makeGame({ seed: 5 });
+    const h = makeHandling({ das: 0, arr: 1 });
+    const f = makeInputFrame();
+    step(g);                             // spawn the first piece
+    if (setup) setup(g);
+    hardDrop(g);                         // lock it now
+
+    f.right = true;
+    f.rightEdge = true;
+    let firstX = null;
+    for (let t = 1; t <= 80; t++) {
+      stepWithInput(g, h, f);
+      f.rightEdge = false;
+      if (g.piece === -1) continue;      // no piece yet — still dead time
+      if (firstX === null) { firstX = g.x; continue; }
+      if (g.x !== firstX) return t;
+    }
+    return -1;
+  }
+
+  // 2 ticks: the lock, then the spawn, then input. The lock and the spawn
+  // cannot share a tick, so this is the floor.
+  eq(deadTicks(null), 2, 'a plain placement is controllable 2 ticks after the lock');
+
+  // 3 ticks: lock -> clear -> spawn -> input.
+  eq(deadTicks((g) => {
+    for (let x = 0; x < COLS; x++) setCell(g.board, x, TOTAL_ROWS - 1, 1);
+    for (let x = 3; x <= 6; x++) setCell(g.board, x, TOTAL_ROWS - 1, 0);
+    recomputeTop(g.board);
+    g.piece = PIECE.I;
+    g.rot = 0;
+    g.x = 3;
+    g.y = TOTAL_ROWS - 1;
+  }), 3, 'a line clear is controllable 3 ticks after the lock');
+}
+
+group('the ARE and line-clear delay are configurable');
+
+{
+  const g = makeGame({ seed: 6 });
+  eq(g.are, 0, 'ARE defaults to 0, not the console-Tetris 10');
+  eq(g.lineClearDelay, 0, 'the line-clear delay defaults to 0, not 20');
+
+  setTiming(g, { are: 12, lineClearDelay: 20 });
+  eq(g.are, 12, 'setTiming sets ARE');
+  eq(g.lineClearDelay, 20, 'setTiming sets the line-clear delay');
+
+  setTiming(g, { are: -5 });
+  eq(g.are, 0, 'a negative ARE clamps to 0');
+  setTiming(g, { are: NaN });
+  eq(g.are, 0, 'a NaN ARE clamps to 0');
+  setTiming(g, { lineClearDelay: -1 });
+  eq(g.lineClearDelay, 0, 'and so does a negative line-clear delay');
+}
+
+{
+  // Raising ARE must genuinely delay the next piece — the knob has to work in
+  // both directions, or "configurable" means nothing.
+  const g = makeGame({ seed: 7 });
+  setTiming(g, { are: 12 });
+  const h = makeHandling({ das: 0, arr: 1 });
+  const f = makeInputFrame();
+  step(g);
+  hardDrop(g);
+
+  f.right = true;
+  f.rightEdge = true;
+  let firstX = null;
+  let moved = -1;
+  for (let t = 1; t <= 40; t++) {
+    stepWithInput(g, h, f);
+    f.rightEdge = false;
+    if (g.piece === -1) continue;
+    if (firstX === null) { firstX = g.x; continue; }
+    if (g.x !== firstX) { moved = t; break; }
+  }
+  ok(moved >= 12, 'raising ARE to 12 delays the next piece by at least 12 ticks (' + moved + ')');
 }
 
 /* ------------------------------------------------------------ determinism */

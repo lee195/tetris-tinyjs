@@ -20,7 +20,7 @@ import { SHAPES } from './pieces.js';
 import { makeBag } from './rng.js';
 import {
   LOCK_DELAY, MOVE_RESET_LIMIT, ROTATE_RESET_LIMIT, SHARE_RESET_BUDGET,
-  LINE_CLEAR_DELAY, SPAWN_DELAY, gravityFrames,
+  LINE_CLEAR_DELAY_DEFAULT, ARE_DEFAULT, gravityFrames,
   tryMove, tryRotate, dropRow, spawnPosition, isBlockedOut,
 } from './rules.js';
 
@@ -58,6 +58,9 @@ export function makeGame(opts) {
     moveResets: 0,
     rotateResets: 0,
     grounded: false,
+    /** Ticks the next piece waits after a lock, and the line-clear pause. */
+    are: ARE_DEFAULT,
+    lineClearDelay: LINE_CLEAR_DELAY_DEFAULT,
     lines: 0,
     pieces: 0,
     score: 0,
@@ -137,7 +140,7 @@ function tickClearing(state) {
   const n = clearLines(state.board);
   state.lines += n;
   state.pendingRows = null;
-  state.timer = SPAWN_DELAY;
+  state.timer = state.are;
   state.status = STATUS.SPAWN;
 }
 
@@ -148,10 +151,10 @@ function lockCurrent(state) {
   const rows = fullRows(state.board);
   if (rows.length) {
     state.pendingRows = rows;
-    state.timer = LINE_CLEAR_DELAY;
+    state.timer = state.lineClearDelay;
     state.status = STATUS.CLEARING;
   } else {
-    state.timer = SPAWN_DELAY;
+    state.timer = state.are;
     state.status = STATUS.SPAWN;
   }
 }
@@ -274,6 +277,25 @@ export function setLevel(state, level) {
   state.gravityFrames = gravityFrames(level);
 }
 
+/**
+ * Set the lock-to-spawn and line-clear delays, in ticks.
+ *
+ * These live on the game state rather than in the handling config because they
+ * are game rules, not input policy — but a Phase 4 settings screen wants them
+ * beside DAS/ARR, so it should hold one config object and fan it out to
+ * `setHandling()` and `setTiming()`.
+ *
+ * Lowering `are` while a spawn is already pending is safe: the timer is only
+ * ever compared against zero, so a shorter delay simply takes effect.
+ */
+export function setTiming(state, cfg) {
+  if (cfg.are !== undefined) state.are = Math.max(0, cfg.are | 0);
+  if (cfg.lineClearDelay !== undefined) {
+    state.lineClearDelay = Math.max(0, cfg.lineClearDelay | 0);
+  }
+  return state;
+}
+
 /* ------------------------------------------------------------- diagnostics */
 
 /** One integer summarising the whole simulation state, for determinism tests. */
@@ -286,6 +308,10 @@ export function gameHash(state) {
   h = (Math.imul(h ^ (state.lines + 1), 0x01000193) >>> 0);
   h = (Math.imul(h ^ (state.pieces + 1), 0x01000193) >>> 0);
   h = (Math.imul(h ^ state.queue.join('').length, 0x01000193) >>> 0);
+  // Timing config is part of the simulated state: two runs with different ARE
+  // or line-clear delay are different games and must not hash equal.
+  h = (Math.imul(h ^ (state.are + 1), 0x01000193) >>> 0);
+  h = (Math.imul(h ^ (state.lineClearDelay + 1), 0x01000193) >>> 0);
   return h >>> 0;
 }
 
