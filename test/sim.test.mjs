@@ -24,20 +24,7 @@ import {
   gameHash, STATUS, setLevel,
 } from '../src/frontend/js/game.js';
 import { makeLoop, advance, alpha, MAX_CATCHUP_MS } from '../src/frontend/js/loop.js';
-
-/* ------------------------------------------------------------- test runner */
-
-let passed = 0;
-let failed = 0;
-const failures = [];
-
-function ok(cond, msg) {
-  if (cond) { passed++; } else { failed++; failures.push(msg); }
-}
-function eq(got, want, msg) {
-  ok(got === want, msg + ' — got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want));
-}
-function group(name) { console.log('\n' + name); }
+import { ok, eq, group, done } from './harness.mjs';
 
 /* ------------------------------------------------------------------- rng */
 
@@ -460,11 +447,4 @@ group('fixed-timestep loop');
 
 /* --------------------------------------------------------------- summary */
 
-console.log('\n' + '-'.repeat(52));
-if (failed === 0) {
-  console.log('PASS — ' + passed + ' assertions');
-} else {
-  console.log('FAIL — ' + failed + ' of ' + (passed + failed) + ' assertions failed:');
-  for (const f of failures) console.log('  x ' + f);
-}
-process.exit(failed === 0 ? 0 : 1);
+done('simulation');

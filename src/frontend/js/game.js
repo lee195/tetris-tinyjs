@@ -161,8 +161,13 @@ function lockCurrent(state) {
 /**
  * Restart the lock timer after a player action, spending reset budget.
  * Only meaningful while resting — a move in mid-air costs nothing.
+ *
+ * Exported because a multi-cell auto-shift is ONE player action and must cost
+ * one reset, not one per cell. `apply.js` moves the cells with `move(…, true)`
+ * and then calls this once. Charging per cell would make ARR 0 — a slide of up
+ * to nine cells — burn most of the budget on a single key press.
  */
-function spendReset(state, kind) {
+export function spendReset(state, kind) {
   if (!isGrounded(state)) return;
   if (SHARE_RESET_BUDGET) {
     if (state.moveResets + state.rotateResets >= MOVE_RESET_LIMIT) return;
@@ -177,12 +182,18 @@ function spendReset(state, kind) {
   state.lockTimer = 0;
 }
 
-export function move(state, dx) {
+/**
+ * Move one cell sideways. Returns false when blocked.
+ *
+ * `skipReset` suppresses the lock-timer reset, for the intermediate cells of a
+ * single auto-shift action — see `spendReset`.
+ */
+export function move(state, dx, skipReset) {
   if (state.status !== STATUS.FALLING) return false;
   const r = tryMove(state.board, state.piece, state.rot, state.x, state.y, dx, 0);
   if (!r) return false;
   state.x = r.x;
-  spendReset(state, 'move');
+  if (!skipReset) spendReset(state, 'move');
   return true;
 }
 
