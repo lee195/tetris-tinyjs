@@ -20,6 +20,7 @@ import {
   settingsToConfig, captureSettings, settingsEqual,
 } from '../src/frontend/js/settings.js';
 import { encodeHandling, decodeHandling, DEFAULT_HANDLING } from '../src/frontend/js/handling.js';
+import { KEYMAP_IDS } from '../src/frontend/js/input.js';
 import { ARE_DEFAULT, LINE_CLEAR_DELAY_DEFAULT } from '../src/frontend/js/rules.js';
 import { MODE, MODES, MODE_LIST } from '../src/frontend/js/modes.js';
 import { ok, eq, group, done } from './harness.mjs';
@@ -36,6 +37,7 @@ group('defaults');
   eq(d.handling.sdf, null, 'SDF defaults to null, meaning instant');
   eq(d.timing.are, ARE_DEFAULT, 'ARE defaults to 0');
   eq(d.timing.lineClearDelay, LINE_CLEAR_DELAY_DEFAULT, 'and so does the line-clear delay');
+  eq(d.keymap, 'default', 'the keymap defaults to the arrows/WASD map');
   eq(d.v, SETTINGS_VERSION, 'and the version is stamped');
 
   ok(settingsEqual(null, DEFAULT_SETTINGS), 'null and the defaults are equivalent');
@@ -107,6 +109,30 @@ group('clamping');
   const modes = normalizeSettings({ mode: 'nonsense' });
   eq(modes.mode, MODE.MARATHON, 'an unknown mode falls back to marathon');
   eq(normalizeSettings({ mode: 'sprint' }).mode, MODE.SPRINT, 'a known one is kept');
+}
+
+{
+  // The keymap is a name, not a number, so it validates against the ids the
+  // input module actually offers rather than clamping.
+  eq(normalizeSettings({ keymap: 'ijkl' }).keymap, 'ijkl', 'a known keymap is kept');
+  eq(normalizeSettings({ keymap: 'dvorak' }).keymap, 'default',
+    'an unknown keymap falls back to the default');
+  eq(normalizeSettings({ keymap: 5 }).keymap, 'default', 'and so does a non-string');
+
+  // The validator and the panel share one list, so a new map cannot be added to
+  // the input module and be unreachable in settings.
+  ok(KEYMAP_IDS.indexOf('default') !== -1 && KEYMAP_IDS.indexOf('ijkl') !== -1,
+    'the keymap ids come from the input module');
+
+  // And it is a real settings field: equal when equal, different when not, and
+  // carried through capture.
+  ok(settingsEqual({ keymap: 'ijkl' }, { keymap: 'ijkl' }), 'two equal keymaps compare equal');
+  ok(!settingsEqual({ keymap: 'ijkl' }, { keymap: 'default' }),
+    'and a different keymap is not equal');
+
+  const game = { mode: { id: 'marathon' }, startLevel: 1, are: 0, lineClearDelay: 0 };
+  const captured = captureSettings({ keymap: 'ijkl' }, { das: 4, arr: 1, sdf: Infinity, dcd: 0 }, game);
+  eq(captured.keymap, 'ijkl', 'captureSettings carries the keymap through');
 }
 
 /* --------------------------------------------------------- the JSON round trip */

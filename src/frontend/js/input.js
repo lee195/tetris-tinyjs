@@ -17,36 +17,93 @@
  */
 
 /**
+ * The selectable keymaps, by id.
+ *
  * `event.code`, not `event.key`: physical keys, so the layout does not change
- * the controls. Remappable in Phase 4 — this is the default set only.
+ * the controls. A map is just a code → action table; the *active* one is held on
+ * the input state (see `makeInput`) rather than read from a module constant, so
+ * changing it in settings takes effect immediately without re-attaching the
+ * listeners.
+ *
+ * A keymap is a presentation choice, not simulation config: the input frame it
+ * produces carries semantic actions, and that is what replays record. Swapping
+ * maps therefore cannot change a replay or the game hash.
+ *
+ * `default` keeps the arrows and WASD. `ijkl` is the hands-on-the-home-row
+ * alternative: movement and rotation on I/J/K/L (with U for counter-clockwise,
+ * which has no fourth letter), hold on E, hard drop still on Space.
  */
-const KEYMAP = {
-  ArrowLeft: 'left',
-  KeyA: 'left',
-  ArrowRight: 'right',
-  KeyD: 'right',
-  ArrowDown: 'softDrop',
-  KeyS: 'softDrop',
-  ArrowUp: 'cw',
-  KeyX: 'cw',
-  KeyW: 'cw',
-  KeyZ: 'ccw',
-  Space: 'hardDrop',
-  KeyC: 'hold',
-  ShiftLeft: 'hold',
-  ShiftRight: 'hold',
+export const KEYMAPS = {
+  default: {
+    label: 'Arrows / WASD',
+    map: {
+      ArrowLeft: 'left',
+      KeyA: 'left',
+      ArrowRight: 'right',
+      KeyD: 'right',
+      ArrowDown: 'softDrop',
+      KeyS: 'softDrop',
+      ArrowUp: 'cw',
+      KeyX: 'cw',
+      KeyW: 'cw',
+      KeyZ: 'ccw',
+      Space: 'hardDrop',
+      KeyC: 'hold',
+      ShiftLeft: 'hold',
+      ShiftRight: 'hold',
+    },
+  },
+  ijkl: {
+    label: 'IJKL',
+    map: {
+      KeyJ: 'left',
+      KeyL: 'right',
+      KeyK: 'softDrop',
+      KeyI: 'cw',
+      KeyU: 'ccw',
+      Space: 'hardDrop',
+      KeyE: 'hold',
+    },
+  },
 };
+
+/** Ids in display order, so the panel and the settings validator share one list. */
+export const KEYMAP_IDS = Object.keys(KEYMAPS);
+
+/** The action map for an id, falling back to the default for an unknown one. */
+export function keymapFor(id) {
+  return (KEYMAPS[id] || KEYMAPS.default).map;
+}
+
+/** The human label for an id, for the settings panel. */
+export function keymapLabel(id) {
+  return (KEYMAPS[id] || KEYMAPS.default).label;
+}
 
 /** Actions that are edges (one press = one action) rather than held state. */
 const EDGE_ACTIONS = ['left', 'right', 'cw', 'ccw', 'hardDrop', 'hold'];
 
-export function makeInput() {
+export function makeInput(keymapId) {
   return {
     held: Object.create(null),
     edges: Object.create(null),
     paused: false,
     detach: null,
+    // The resolved action table, read at event time — see the note on KEYMAPS.
+    keymap: keymapFor(keymapId),
   };
+}
+
+/**
+ * Switch the active keymap.
+ *
+ * Replaces the map object on the input state; the listeners look it up per
+ * event, so no detach/attach is needed and no in-flight key state is disturbed.
+ * `newGame` clears the latches anyway, but the panel can change this mid-run and
+ * a held key from the old map simply stops being a game key.
+ */
+export function setKeymap(input, id) {
+  input.keymap = keymapFor(id);
 }
 
 /**
@@ -74,7 +131,7 @@ export function attachInput(input, target, onFocusLost) {
   const win = target || window;
 
   const onKeyDown = (e) => {
-    const action = KEYMAP[e.code];
+    const action = input.keymap[e.code];
     if (!action || hasModifier(e) || isTyping(e)) return;
     // Space and the arrows scroll the document by default.
     e.preventDefault();
@@ -87,7 +144,7 @@ export function attachInput(input, target, onFocusLost) {
   };
 
   const onKeyUp = (e) => {
-    const action = KEYMAP[e.code];
+    const action = input.keymap[e.code];
     if (!action || isTyping(e)) return;
     input.held[action] = false;
   };
@@ -187,5 +244,3 @@ export function resumeInput(input) {
   resetInput(input);
   input.paused = false;
 }
-
-export { KEYMAP };

@@ -15,6 +15,9 @@
 import { encodeHandling, decodeHandling, DEFAULT_HANDLING } from './handling.js';
 import { ARE_DEFAULT, LINE_CLEAR_DELAY_DEFAULT } from './rules.js';
 import { MODE, MODES, MODE_LIST } from './modes.js';
+// The valid keymap ids live with the maps themselves, so the validator cannot
+// drift from what `input.js` actually offers.
+import { KEYMAP_IDS } from './input.js';
 
 /** Bump when the shape changes in a way that needs migrating. */
 export const SETTINGS_VERSION = 1;
@@ -72,6 +75,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // exists, or the volume would become part of the replay config.
   volume: 80,
   muted: false,
+  // Which control scheme the input adapter reads. Like audio, this is not
+  // simulation config: replays store the actions a key produces, not the key.
+  keymap: 'default',
 });
 
 function clamp(value, range, fallback) {
@@ -128,6 +134,10 @@ export function normalizeSettings(raw) {
     // than merely truthy. Anything else would make the setting impossible to
     // turn off by editing the file.
     muted: r.muted === true,
+    // An unknown id — a hand-edit, or a file from a build whose keymaps changed —
+    // falls back to the default rather than to an empty map that would leave the
+    // player unable to move.
+    keymap: KEYMAP_IDS.includes(r.keymap) ? r.keymap : d.keymap,
   };
 }
 
@@ -168,6 +178,7 @@ export function captureSettings(settings, handlingCfg, game) {
     timing: { are: game.are, lineClearDelay: game.lineClearDelay },
     volume: n.volume,
     muted: n.muted,
+    keymap: n.keymap,
   });
 }
 
@@ -184,5 +195,6 @@ export function settingsEqual(a, b) {
     && x.timing.are === y.timing.are
     && x.timing.lineClearDelay === y.timing.lineClearDelay
     && x.volume === y.volume
-    && x.muted === y.muted;
+    && x.muted === y.muted
+    && x.keymap === y.keymap;
 }

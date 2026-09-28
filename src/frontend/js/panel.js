@@ -17,6 +17,7 @@
 
 import { LIMITS, normalizeSettings } from './settings.js';
 import { MODE_LIST, MODES } from './modes.js';
+import { KEYMAP_IDS, keymapLabel } from './input.js';
 import { el } from './dom.js';
 
 /**
@@ -104,6 +105,20 @@ export function makePanel(root, handlers) {
   }
   modeRow.appendChild(modeSelect);
   root.appendChild(modeRow);
+
+  /* -- keymap, which is a choice between named maps rather than a value -- */
+
+  const keymapRow = el('div', 'set-row');
+  keymapRow.appendChild(el('label', 'set-label', 'Keymap'));
+  const keymapSelect = el('select', 'set-select');
+  for (const id of KEYMAP_IDS) {
+    const opt = el('option', null, keymapLabel(id));
+    opt.value = id;
+    keymapSelect.appendChild(opt);
+  }
+  keymapRow.appendChild(keymapSelect);
+  keymapRow.appendChild(el('p', 'set-hint', 'which keys move, rotate and hold'));
+  root.appendChild(keymapRow);
 
   /* -- start level, which is per mode rather than global -- */
 
@@ -255,6 +270,11 @@ export function makePanel(root, handlers) {
   actions.appendChild(closeBtn);
   root.appendChild(actions);
 
+  keymapSelect.addEventListener('change', () => {
+    current = readInto(current);
+    onCommit(current);
+  });
+
   modeSelect.addEventListener('change', () => {
     current.mode = modeSelect.value;
     // Deliberately NOT `readInto` here: that reads the level slider into
@@ -277,6 +297,7 @@ export function makePanel(root, handlers) {
     target.levels[modeSelect.value] = Number(levelRange.value);
     target.handling.sdf = instant.checked ? null : Number(sdfRange.value);
     target.muted = mute.checked;
+    target.keymap = keymapSelect.value;
     return normalizeSettings(target);
   }
 
@@ -294,6 +315,7 @@ export function makePanel(root, handlers) {
     sdfRange.value = String(isInstant ? LIMITS.sdf.max : current.handling.sdf);
     sdfOut.textContent = isInstant ? 'instant' : String(current.handling.sdf);
     mute.checked = current.muted;
+    keymapSelect.value = current.keymap;
     modeSelect.value = current.mode;
     levelRange.value = String(current.levels[current.mode]);
     levelOut.textContent = levelRange.value;

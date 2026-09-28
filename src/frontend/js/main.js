@@ -25,7 +25,7 @@ import { TICK_MS } from './constants.js';
 import { makeGame, STATUS, setTiming, setStartLevel } from './game.js';
 import { MODE, MODES, MODE_LIST } from './modes.js';
 import { makeHandling, makeInputFrame, resetHandling, setHandling } from './handling.js';
-import { makeInput, attachInput, pollInput, resetInput, KEYMAP } from './input.js';
+import { makeInput, attachInput, pollInput, resetInput, setKeymap } from './input.js';
 import { stepWithInput } from './apply.js';
 import { makeLoop, advance, resetLoop } from './loop.js';
 import {
@@ -229,6 +229,9 @@ function applyLive(next) {
   // clamps every position above 0 to full volume, so the control appears dead.
   sfx.setVolume(next.volume / 100);
   sfx.setMuted(next.muted);
+  // The keymap is input policy, not simulation config, so it lives here beside
+  // audio rather than in `settingsToConfig` — see the note in input.js.
+  setKeymap(input, next.keymap);
 }
 
 /**
@@ -600,7 +603,7 @@ window.addEventListener('keydown', (e) => {
   // player who wants settings or the title screen during the countdown still
   // gets them. `resetInput` drops the edge `attachInput` just latched, so the
   // skip key cannot also hard-drop the first piece.
-  if (isCountingDown(countdown) && KEYMAP[e.code]) {
+  if (isCountingDown(countdown) && input.keymap[e.code]) {
     skipCountdown(countdown);
     resetInput(input);
     return;

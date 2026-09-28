@@ -28,6 +28,7 @@ import {
 import { applyIntent, stepWithInput } from '../src/frontend/js/apply.js';
 import {
   makeInput, pollInput, resetInput, pauseInput, resumeInput, attachInput,
+  setKeymap, keymapFor, keymapLabel, KEYMAPS, KEYMAP_IDS,
 } from '../src/frontend/js/input.js';
 import { ok, eq, group, done } from './harness.mjs';
 
@@ -530,6 +531,100 @@ group('input adapter (the parts that run without a DOM)');
   const f = makeInputFrame();
   pollInput(inp, f);
   ok(f.softDrop, 'soft drop is a held key, not an edge');
+}
+
+/* ----------------------------------------------------------------- keymaps */
+
+group('the keymaps');
+
+{
+  // Both maps are reachable by id, and the ids are the ones the panel and the
+  // settings validator iterate.
+  ok(KEYMAP_IDS.indexOf('default') !== -1, 'the default keymap is listed');
+  ok(KEYMAP_IDS.indexOf('ijkl') !== -1, 'and so is ijkl');
+  eq(keymapLabel('ijkl'), 'IJKL', 'a map carries a label for the panel');
+  eq(keymapLabel('nonsense'), KEYMAPS.default.label,
+    'an unknown id falls back to the default label');
+
+  const d = keymapFor('default');
+  eq(d.ArrowLeft, 'left', 'the default map keeps the arrows');
+  eq(d.KeyA, 'left', 'and WASD');
+  eq(d.Space, 'hardDrop', 'and space for hard drop');
+  eq(d.ShiftLeft, 'hold', 'and shift for hold');
+
+  const k = keymapFor('ijkl');
+  eq(k.KeyJ, 'left', 'IJKL moves left on J');
+  eq(k.KeyL, 'right', 'and right on L');
+  eq(k.KeyK, 'softDrop', 'soft drops on K');
+  eq(k.KeyI, 'cw', 'rotates clockwise on I');
+  eq(k.KeyU, 'ccw', 'and counter-clockwise on U');
+  eq(k.KeyE, 'hold', 'holds on E');
+  eq(k.Space, 'hardDrop', 'and hard drop stays on space');
+  eq(k.ArrowLeft, undefined, 'the arrows are off in the IJKL map');
+  eq(k.KeyA, undefined, 'and so is WASD');
+
+  // A missing or unknown id must never leave the player without a map.
+  eq(keymapFor('nonsense'), KEYMAPS.default.map,
+    'an unknown id falls back to the default map');
+  eq(keymapFor(undefined), KEYMAPS.default.map, 'and so does undefined');
+}
+
+{
+  // The runtime path, and the one that would break silently: the adapter reads
+  // `input.keymap` at event time, so switching maps must change what a physical
+  // key does without re-attaching the listeners.
+  const listeners = {};
+  const fakeWin = {
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    removeEventListener: () => {},
+  };
+  const savedDoc = globalThis.document;
+  globalThis.document = { addEventListener: () => {}, removeEventListener: () => {}, hidden: false };
+
+  try {
+    const inp = makeInput();
+    attachInput(inp, fakeWin, null);
+    const f = makeInputFrame();
+
+    const press = (code) => listeners.keydown({
+      code, preventDefault() {}, repeat: false,
+      metaKey: false, ctrlKey: false, altKey: false,
+    });
+
+    // Default map: the arrow moves.
+    press('ArrowLeft');
+    pollInput(inp, f);
+    ok(f.left, 'the default map moves on the arrow key');
+
+    resetInput(inp);
+    setKeymap(inp, 'ijkl');
+
+    // The arrow is now inert...
+    press('ArrowLeft');
+    pollInput(inp, f);
+    ok(!f.left, 'after switching, the arrow no longer moves');
+
+    // ...and J moves instead.
+    press('KeyJ');
+    pollInput(inp, f);
+    ok(f.left, 'and J does');
+
+    press('KeyI');
+    pollInput(inp, f);
+    ok(f.cwEdge, 'I rotates clockwise');
+
+    press('KeyE');
+    pollInput(inp, f);
+    ok(f.holdEdge, 'E holds');
+
+    setKeymap(inp, 'default');
+    resetInput(inp);
+    press('KeyJ');
+    pollInput(inp, f);
+    ok(!f.left, 'and switching back turns J off again');
+  } finally {
+    globalThis.document = savedDoc;
+  }
 }
 
 /* ----------------------------------------------------- against a real game */
