@@ -133,8 +133,13 @@ export function pick(sfx, game, it) {
     const combo = c.combo > 0 ? c.combo : 0;
     if (c.tspin) return { name: SFX.TSPIN, rate: pitch(combo, 0.03), cut: false };
     if (c.lines > 0) return { name: SFX.CLEAR, rate: pitch(combo, 0.04), cut: false };
-    // A lock with no clear still happened, and it is the commonest event in the
-    // game — the level is folded in so a faster game sounds heavier.
+    // A lock with no clear. A hard drop is the same lock event, but the player
+    // chose it, so it gets its own sound. This branch is the only place a hard
+    // drop can be heard: every hard drop locks, so without this check the lock
+    // branch would swallow it and `SFX.HARD_DROP` below would never fire.
+    if (it && it.didHardDrop) return { name: SFX.HARD_DROP, rate: 1, cut: false };
+    // The commonest event in the game — the level is folded in so a faster game
+    // sounds heavier.
     return { name: SFX.LOCK, rate: 1 - Math.min(game.level, 15) * 0.012, cut: false };
   }
 

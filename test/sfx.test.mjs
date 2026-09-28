@@ -326,6 +326,31 @@ group('which sound');
 }
 
 {
+  // A hard drop is a lock too, and the lock branch runs first. Without an
+  // explicit hard-drop case inside that branch, `SFX.HARD_DROP` is unreachable
+  // in play: every hard drop locks, so the lock sound would swallow it. This is
+  // the case the earlier tests missed — they only fed `didHardDrop` with no lock.
+  const it = makeIntent();
+  it.didHardDrop = true;
+
+  const sfx = makeSfxState();
+  const g = fakeGame({ lastClear: clear({ lines: 0 }) });
+  eq(pick(sfx, g, it).name, SFX.HARD_DROP,
+    'a hard drop that locks sounds like a hard drop, not a lock');
+
+  // Clear and T-spin still outrank it: they are the more informative outcome.
+  const sfx2 = makeSfxState();
+  const g2 = fakeGame({ lastClear: clear({ lines: 1 }) });
+  eq(pick(sfx2, g2, it).name, SFX.CLEAR,
+    'but a hard drop that clears still sounds like a clear');
+
+  const sfx3 = makeSfxState();
+  const g3 = fakeGame({ lastClear: clear({ lines: 0 }) });
+  eq(pick(sfx3, g3, null).name, SFX.LOCK,
+    'and an auto-lock with no hard drop is still a lock');
+}
+
+{
   // Pitch rises with the combo, so a small bank does not sound repetitive.
   const low = pick(makeSfxState(), fakeGame({ lastClear: clear({ lines: 1, combo: -1 }) }), null);
   const high = pick(makeSfxState(), fakeGame({ lastClear: clear({ lines: 1, combo: 6 }) }), null);

@@ -50,6 +50,9 @@ import { buildItems, keyToAction, confirmKey } from './menuModel.js';
 /** How long a "TETRIS" / "T-SPIN DOUBLE" callout stays on screen, in ticks. */
 const BANNER_TICKS = 66;
 
+/** How long the just-locked piece flashes for, in ticks. */
+const LOCK_FLASH_TICKS = 8;
+
 const canvas = document.getElementById('game');
 const renderer = makeRenderer(canvas);
 const perf = makePerf();
@@ -62,7 +65,19 @@ const frame = makeInputFrame();
 const handling = makeHandling(normalizeSettings(null).handling);
 
 /** Reused, never rebuilt — the draw call must not allocate. */
-const flags = { paused: false, over: false, banner: '', watching: false, ghost: false, priorBest: 0 };
+const flags = {
+  paused: false, over: false, banner: '', watching: false, ghost: false,
+  priorBest: 0, lockFlash: null,
+};
+
+/**
+ * The cells of the last locked piece, for the flash.
+ *
+ * Captured on the tick it locked, because once the piece is placed the board
+ * cannot say which cells were the newest. Reused, like `flags`.
+ */
+const lockFlash = { piece: -1, rot: 0, x: 0, y: 0, until: 0 };
+const lockFlashView = { piece: -1, rot: 0, x: 0, y: 0, alpha: 0 };
 
 /** The live run. */
 let game;
@@ -334,6 +349,7 @@ function newGame(seed, nextMode) {
   seenClear = null;
   banner = '';
   bannerUntil = 0;
+  lockFlash.until = 0;
 }
 
 /**
@@ -471,10 +487,26 @@ function onFrame(now) {
       for (let i = 0; i < ticks; i++) {
         // Before the tick consumes the edges — see the note at the top.
         if (!runRecorded) recordTick(recorder, frame);
+        // The piece that may lock on this tick, captured before it is gone: once
+        // placed, the board cannot say which cells were the newest, so the lock
+        // flash has to remember the piece that produced them.
+        const lockBefore = game.lastClear;
+        const locked = game.status === STATUS.FALLING && game.piece >= 0;
+        const lp = game.piece;
+        const lr = game.rot;
+        const lx = game.x;
+        const ly = game.y;
         // The intent carries what the tick actually applied, which is what the
         // sound decisions read — see the note on the outcome fields in
         // `makeIntent`.
         const it = stepWithInput(game, handling, frame);
+        if (locked && game.lastClear !== lockBefore) {
+          lockFlash.piece = lp;
+          lockFlash.rot = lr;
+          lockFlash.x = lx;
+          lockFlash.y = ly;
+          lockFlash.until = game.ticks + LOCK_FLASH_TICKS;
+        }
         sfx.fire(pick(sfxState, game, it));
         if (ghost && !ghost.done && !playbackStep(ghost)) ghost.done = true;
         if (game.status === STATUS.OVER) break;
@@ -509,6 +541,19 @@ function onFrame(now) {
   flags.priorBest = priorBest;
   // Empty string when there is nothing to show; the renderer keys off truthiness.
   flags.countdown = countdownLabel(countdown);
+
+  // The lock flash, while its window is open. Suppressed on a replay: the flash
+  // is stamped with the live game's ticks, which the replay's clock does not share.
+  if (!watch && shown.ticks < lockFlash.until) {
+    lockFlashView.piece = lockFlash.piece;
+    lockFlashView.rot = lockFlash.rot;
+    lockFlashView.x = lockFlash.x;
+    lockFlashView.y = lockFlash.y;
+    lockFlashView.alpha = (lockFlash.until - shown.ticks) / LOCK_FLASH_TICKS;
+    flags.lockFlash = lockFlashView;
+  } else {
+    flags.lockFlash = null;
+  }
 
   // The Restart button belongs to a live run, not the title screen, a replay or
   // an open settings panel. `setVisible` memoizes, so this is a comparison per

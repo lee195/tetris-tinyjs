@@ -222,6 +222,36 @@ function checkRender(deps, report) {
     !near(edge, WELL_BG, 4), show(edge));
   report.check('the ghost is an outline, not a fill',
     near(centre, WELL_BG, 4), show(centre));
+
+  // 12. The resting pulse: a grounded piece brightens so the lock-delay window is
+  //     visible. Sampled at a cell centre, where the pulse fill lands. Without
+  //     this, an instant soft drop lands a piece that vanishes half a second
+  //     later with no cue that it was about to lock.
+  const pulseCell = cellCentre(L, 4, VISIBLE_TOP + 4);
+  g.grounded = false;
+  draw(renderer, g, { paused: false, over: false, banner: '' });
+  const plainPiece = at(ctx.getImageData(0, 0, canvas.width, canvas.height),
+    pulseCell[0], pulseCell[1], dpr);
+  g.grounded = true;
+  g.lockTimer = 3;   // sin(1.8) is near 1, so the pulse is near its brightest
+  draw(renderer, g, { paused: false, over: false, banner: '' });
+  const pulsedPiece = at(ctx.getImageData(0, 0, canvas.width, canvas.height),
+    pulseCell[0], pulseCell[1], dpr);
+  report.check('a grounded piece pulses brighter than a falling one',
+    !near(plainPiece, pulsedPiece, 4), show(plainPiece) + ' -> ' + show(pulsedPiece));
+  g.grounded = false;
+
+  // 13. The lock flash: the just-locked cells light up. The driver hands the
+  //     renderer the piece that locked, because the board alone cannot say which
+  //     cells were newest.
+  draw(renderer, g, {
+    paused: false, over: false, banner: '',
+    lockFlash: { piece: PIECE.T, rot: 0, x: 3, y: VISIBLE_TOP + 4, alpha: 1 },
+  });
+  const flashed = at(ctx.getImageData(0, 0, canvas.width, canvas.height),
+    pulseCell[0], pulseCell[1], dpr);
+  report.check('a lock flash lights the placed cells',
+    !near(flashed, plainPiece, 4), show(flashed) + ' vs ' + show(plainPiece));
 }
 
 /* ------------------------------------------------------------ pacing checks */

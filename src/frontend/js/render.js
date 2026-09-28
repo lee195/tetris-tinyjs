@@ -308,6 +308,38 @@ export function draw(r, game, flags, ghost) {
       ctx.globalAlpha = 1;
     }
     drawShape(ctx, L, shape, game.x, game.y, BASE[game.piece + 1], LIGHT[game.piece + 1]);
+
+    // Resting pulse: while the piece is grounded, its lock delay is running, and
+    // a pulsing brightness makes that window visible. Without it an instant soft
+    // drop lands the piece and it disappears into the stack half a second later
+    // with nothing to say it was about to.
+    if (game.grounded) {
+      const pulse = 0.18 + 0.18 * Math.sin(game.lockTimer * 0.6);
+      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = pulse;
+      for (let i = 0; i < shape.length; i += 2) {
+        const y = game.y + shape[i + 1];
+        if (y < VISIBLE_TOP) continue;
+        ctx.fillRect(boardCellX(L, game.x + shape[i]) + 1, boardCellY(L, y) + 1, cell - 2, cell - 2);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // The lock flash: the cells of the piece that just locked, lit up and fading.
+  // The driver captured the piece's position on the tick it locked, because once
+  // it is placed the board cannot say which cells were the newest.
+  if (flags && flags.lockFlash) {
+    const f = flags.lockFlash;
+    const shape = SHAPES[f.piece][f.rot];
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = Math.max(0, Math.min(1, f.alpha)) * 0.8;
+    for (let i = 0; i < shape.length; i += 2) {
+      const y = f.y + shape[i + 1];
+      if (y < VISIBLE_TOP) continue;
+      ctx.fillRect(boardCellX(L, f.x + shape[i]) + 1, boardCellY(L, y) + 1, cell - 2, cell - 2);
+    }
+    ctx.globalAlpha = 1;
   }
 
   // Well frame, drawn after the blocks so it sits on top of the edges.
