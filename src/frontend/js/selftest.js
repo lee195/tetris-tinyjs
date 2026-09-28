@@ -485,12 +485,48 @@ function checkMenu(deps, report) {
     shutDisplay === 'none', 'display: ' + shutDisplay);
 }
 
+/**
+ * The in-game Restart button, checked the same way as the menu.
+ *
+ * Same failure mode as the menu's class contract, and the same silence: a typo
+ * on either side of the `hud-open` agreement leaves a button that never appears,
+ * or one that never goes away and sits over the title screen. The computed style
+ * is what makes this a real check rather than a string comparison.
+ */
+function checkHud(deps, report) {
+  const root = document.getElementById('hud');
+  report.check('the hud element is in the document', !!root);
+  if (!root) return;
+
+  const button = root.querySelector('.hud-btn');
+  report.check('the hud builds a Restart button', !!button);
+  report.check('and it is labelled', !!button && button.textContent.length > 0,
+    button ? button.textContent : 'missing');
+
+  // The driver calls `setVisible` every frame. A name that drifts here would
+  // throw inside the frame loop, which kills rAF and leaves a blank window —
+  // exactly the failure the bench exists to catch, and one it did *not* catch
+  // when this method was missing, because the bench never runs the driver loop.
+  report.check('the hud exposes setVisible, which the driver calls',
+    typeof deps.hud.setVisible === 'function', typeof deps.hud.setVisible);
+
+  deps.hud.show();
+  const openDisplay = getComputedStyle(root).display;
+  report.check('a shown hud is actually displayed', openDisplay !== 'none',
+    'display: ' + openDisplay);
+
+  deps.hud.hide();
+  const shutDisplay = getComputedStyle(root).display;
+  report.check('and a hidden hud takes no space and no keys',
+    shutDisplay === 'none', 'display: ' + shutDisplay);
+}
+
 export async function runSelfTest(deps) {
   // Fail loudly on a missing dependency. Without this, a forgotten argument
   // surfaces as "undefined is not an object" thrown from inside a rAF callback,
   // which kills the frame loop — and that looks exactly like an occluded window,
   // so the wrong diagnosis is the easy one to reach.
-  for (const key of ['canvas', 'renderer', 'perf', 'log', 'call', 'sfx', 'gen', 'menu']) {
+  for (const key of ['canvas', 'renderer', 'perf', 'log', 'call', 'sfx', 'gen', 'menu', 'hud']) {
     if (!deps[key]) throw new Error('selftest: deps.' + key + ' is missing');
   }
 
@@ -513,6 +549,11 @@ export async function runSelfTest(deps) {
 
   log('bench: title screen');
   checkMenu(deps, report);
+  for (const l of lines) log(l);
+  lines.length = 0;
+
+  log('bench: in-game hud');
+  checkHud(deps, report);
   for (const l of lines) log(l);
   lines.length = 0;
 

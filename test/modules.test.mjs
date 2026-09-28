@@ -35,7 +35,7 @@ const MODULES = [
   'constants', 'rng', 'pieces', 'board', 'rules', 'game', 'loop',
   'handling', 'apply', 'input', 'render', 'perf', 'scoring', 'modes',
   'replay', 'settings', 'panel', 'selftest', 'sfxgen', 'sfx',
-  'dom', 'menuModel', 'menu',
+  'dom', 'menuModel', 'menu', 'countdown', 'hud',
 ];
 
 const MAIN_PATH = fileURLToPath(new URL('../src/frontend/js/main.js', import.meta.url));

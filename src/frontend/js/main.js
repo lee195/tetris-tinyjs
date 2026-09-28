@@ -25,9 +25,13 @@ import { TICK_MS } from './constants.js';
 import { makeGame, STATUS, setTiming, setStartLevel } from './game.js';
 import { MODE, MODES, MODE_LIST } from './modes.js';
 import { makeHandling, makeInputFrame, resetHandling, setHandling } from './handling.js';
-import { makeInput, attachInput, pollInput, resetInput } from './input.js';
+import { makeInput, attachInput, pollInput, resetInput, KEYMAP } from './input.js';
 import { stepWithInput } from './apply.js';
 import { makeLoop, advance, resetLoop } from './loop.js';
+import {
+  makeCountdown, startCountdown, skipCountdown, isCountingDown,
+  advanceCountdown, fadeCountdown, countdownLabel, COUNTDOWN_SECONDS,
+} from './countdown.js';
 import { makeRenderer, draw } from './render.js';
 import { makePerf, recordFrame, stats, resetPerf, drawPerf } from './perf.js';
 import {
@@ -40,6 +44,7 @@ import { runSelfTest } from './selftest.js';
 import { renderAll } from './sfxgen.js';
 import { pick, makeSfx, makeSfxState, resetSfxState } from './sfx.js';
 import { makeMenu } from './menu.js';
+import { makeHud } from './hud.js';
 import { buildItems, keyToAction } from './menuModel.js';
 
 /** How long a "TETRIS" / "T-SPIN DOUBLE" callout stays on screen, in ticks. */
@@ -50,6 +55,8 @@ const renderer = makeRenderer(canvas);
 const perf = makePerf();
 const perfOut = {};
 const loop = makeLoop();
+/** The pre-run countdown, owned by the driver rather than the simulation. */
+const countdown = makeCountdown();
 const input = makeInput();
 const frame = makeInputFrame();
 const handling = makeHandling(normalizeSettings(null).handling);
@@ -127,6 +134,14 @@ const menu = makeMenu(document.getElementById('menu'), {
   onPlay: (modeId) => startMode(modeId),
   onSettings: () => { resetInput(input); panel.open(); },
   onClose: () => startMode(settings.mode),
+});
+
+/**
+ * The in-game Restart button. `newGame` gives a fresh board and seed in the same
+ * mode, and the countdown plays again — see `newGame`.
+ */
+const hud = makeHud(document.getElementById('hud'), {
+  onRestart: () => newGame(),
 });
 
 /* ------------------------------------------------------------------ bridge */
@@ -208,7 +223,10 @@ function applyLive(next) {
   // That function produces what the *simulation* needs, and the simulation must
   // not know that sound exists — otherwise volume would become part of the
   // replay config.
-  sfx.setVolume(next.volume);
+  // `volume` is a 0..100 percentage because that is what the slider shows; the
+  // sampler's master gain is a 0..1 linear value. Handing it the percentage
+  // clamps every position above 0 to full volume, so the control appears dead.
+  sfx.setVolume(next.volume / 100);
   sfx.setMuted(next.muted);
 }
 
@@ -261,6 +279,7 @@ function showTitle() {
   screen = 'title';
   watch = null;
   ghost = null;
+  startCountdown(countdown, 0);
   menu.set(buildItems(), scoreTable);
   menu.open();
 }
@@ -301,6 +320,9 @@ function newGame(seed, nextMode) {
   // first piece the moment it spawns.
   resetInput(input);
   resetSfxState(sfxState);
+  // Hold the run before its first tick. Driver-side only, so the replay contract
+  // is untouched — see countdown.js.
+  startCountdown(countdown, COUNTDOWN_SECONDS);
   recorder = makeRecorder();
   runRecorded = false;
   watch = null;
@@ -373,6 +395,9 @@ function watchReplay(replay) {
   ghost = null;
   seenClear = null;
   banner = '';
+  // A replay is not a fresh run, so a countdown left over from the live game
+  // must not sit in front of it.
+  startCountdown(countdown, 0);
 }
 
 /** Watch the best replay saved on disk, which exercises the storage round trip. */
@@ -417,6 +442,17 @@ function onFrame(now) {
     loop.acc = 0;
   } else {
     ticks = advance(loop, dt);
+
+    // The pre-run countdown holds the simulation still. It consumes ticks from
+    // the same accumulator, so it is frame-rate independent, and whatever is left
+    // over once it ends is spent on the game in this same frame.
+    if (ticks > 0 && isCountingDown(countdown)) {
+      ticks = advanceCountdown(countdown, ticks);
+      // A key pressed during the countdown must not fire into the first tick.
+      if (!isCountingDown(countdown)) resetInput(input);
+    }
+    // Decays the "GO!" window once the run is under way.
+    if (ticks > 0) fadeCountdown(countdown, ticks);
 
     if (ticks > 0 && watch) {
       for (let i = 0; i < ticks && !watch.done; i++) {
@@ -467,6 +503,13 @@ function onFrame(now) {
   flags.watching = !!watch;
   flags.ghost = !!ghost;
   flags.priorBest = priorBest;
+  // Empty string when there is nothing to show; the renderer keys off truthiness.
+  flags.countdown = countdownLabel(countdown);
+
+  // The Restart button belongs to a live run, not the title screen, a replay or
+  // an open settings panel. `setVisible` memoizes, so this is a comparison per
+  // frame, not a DOM write.
+  hud.setVisible(screen === 'playing' && !watch && !panel.isOpen());
 
   // The ghost's board is drawn dimly under the live one, so a race reads as one
   // stack behind another rather than two pictures to compare by eye.
@@ -538,6 +581,17 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyO') { resetInput(input); panel.open(); return; }
     const quick = MODE_KEYS[e.code];
     if (quick !== undefined && MODE_LIST[quick]) startMode(MODE_LIST[quick]);
+    return;
+  }
+
+  // A game key pressed during the countdown starts the run at once. Only the
+  // game's own keys skip: O/M/Escape/R and the rest keep their meaning, so a
+  // player who wants settings or the title screen during the countdown still
+  // gets them. `resetInput` drops the edge `attachInput` just latched, so the
+  // skip key cannot also hard-drop the first piece.
+  if (isCountingDown(countdown) && KEYMAP[e.code]) {
+    skipCountdown(countdown);
+    resetInput(input);
     return;
   }
 
@@ -640,6 +694,8 @@ async function maybeBench() {
       // The real menu instance, so the bench checks the element and the class the
       // stylesheet actually keys off rather than a stand-in built for the test.
       menu,
+      // And the real hud, for the same reason.
+      hud,
     });
   } catch (err) {
     await call('log', { msg: 'bench: self-test threw: ' + (err && err.message ? err.message : err) });

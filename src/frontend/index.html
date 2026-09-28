@@ -37,6 +37,10 @@
      js/menu.js is where a run begins. -->
 <div id="menu" class="menu" role="dialog" aria-label="Main menu"></div>
 <div id="settings" class="set-panel" role="dialog" aria-label="Settings"></div>
+<!-- The in-game Restart button. DOM rather than canvas: a real button needs no
+     hit-testing code, and it is hidden by a class so it cannot take a game key
+     while the title screen or a replay is up. -->
+<div id="hud" class="hud"></div>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

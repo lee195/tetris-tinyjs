@@ -317,6 +317,7 @@ export function draw(r, game, flags, ghost) {
 
   drawPanel(ctx, L, game, flags);
   if (flags && flags.banner) drawBanner(ctx, L, flags.banner);
+  if (flags && flags.countdown) drawCountdown(ctx, L, flags.countdown);
   if (flags && flags.over) drawOverlay(ctx, L, game, flags);
   else if (flags && flags.paused) drawOverlay(ctx, L, null, flags);
 
@@ -340,6 +341,31 @@ function drawBanner(ctx, L, text) {
   ctx.fillText(text, cx + 1, y + 1);
   ctx.fillStyle = '#f2f6fb';
   ctx.fillText(text, cx, y);
+  ctx.textAlign = 'left';
+}
+
+/**
+ * The pre-run countdown, centred over the well.
+ *
+ * Drawn over a slightly darkened board rather than on its own screen: the piece
+ * that is about to fall is not there yet, but the empty well and the panel give
+ * the player their bearings before the clock starts.
+ */
+function drawCountdown(ctx, L, label) {
+  const cx = L.boardX + L.boardW / 2;
+  const cy = L.boardY + L.boardH / 2;
+  ctx.fillStyle = 'rgba(8, 10, 14, 0.55)';
+  ctx.fillRect(L.boardX, L.boardY, L.boardW, L.boardH);
+
+  const size = Math.max(28, Math.round(L.cell * 3.2));
+  const font = '700 ' + size + 'px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.font = font;
+  // A dark copy one pixel down, so the number reads over any colour.
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillText(label, cx + 2, cy + 2);
+  ctx.fillStyle = '#eef2f7';
+  ctx.fillText(label, cx, cy);
   ctx.textAlign = 'left';
 }
 

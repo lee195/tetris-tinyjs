@@ -236,3 +236,28 @@ canvas#game {
   font-size: 11px;
   color: #5d6675;
 }
+
+/* ------------------------------------------------------------------ hud */
+
+/* Hidden until a run is under way. `display: none`, like the other overlays, so
+   the button cannot take a game key while the title screen is up. */
+.hud { display: none; }
+
+.hud.hud-open {
+  display: block;
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+}
+
+.hud-btn {
+  padding: 7px 14px;
+  background: #22262e;
+  color: #dde3ec;
+  border: 1px solid #333a45;
+  border-radius: 7px;
+  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+}
+
+.hud-btn:hover { background: #2b3038; }
