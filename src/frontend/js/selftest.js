@@ -479,6 +479,23 @@ function checkMenu(deps, report) {
   report.check('the highlight moves', deps.menu.selection() !== before,
     before + ' -> ' + deps.menu.selection());
 
+  // The quit confirmation. Escape opens it and Escape again cancels — checked
+  // through the real instance and the computed style, because a typo on either
+  // side of the `menu-confirm-on` contract would leave a prompt that never
+  // appears, and nothing else would report it.
+  const card = root.querySelector('.menu-confirm');
+  report.check('the menu builds a quit confirmation', !!card);
+  deps.menu.act('close');
+  const confirmOpen = card ? getComputedStyle(card).display : 'none';
+  report.check('escape opens the quit confirmation',
+    deps.menu.isConfirming() && confirmOpen !== 'none',
+    'confirming=' + deps.menu.isConfirming() + ', display: ' + confirmOpen);
+  deps.menu.act('close');
+  const confirmShut = card ? getComputedStyle(card).display : 'none';
+  report.check('and escape again cancels it',
+    !deps.menu.isConfirming() && confirmShut === 'none',
+    'confirming=' + deps.menu.isConfirming() + ', display: ' + confirmShut);
+
   deps.menu.close();
   const shutDisplay = getComputedStyle(root).display;
   report.check('and a closed menu takes no space and no keys',

@@ -23,17 +23,67 @@ export function makeMenu(root, handlers) {
   let index = 0;
   /** The row buttons, kept so moving the highlight does not rebuild them. */
   let buttons = [];
+  /** Whether the quit confirmation is up. Escape opens it; Escape cancels it. */
+  let confirming = false;
 
   const title = el('h1', 'menu-title', 'TETRIS');
   const list = el('div', 'menu-list');
   const table = el('div', 'menu-scores');
   const hint = el('p', 'menu-hint',
-    '↑↓ choose · Enter play · 1–3 quick start · Esc last mode · O settings');
+    '↑↓ choose · Enter play · 1–3 quick start · Esc quit · O settings');
+
+  /* -- the quit confirmation -- */
+
+  // A card over the menu rather than a native `confirm()`: the page has a real
+  // overlay language already, and a browser dialog would look like a different
+  // application. Built once and shown by class, like every other overlay here.
+  const confirmCard = el('div', 'menu-confirm');
+  confirmCard.setAttribute('role', 'alertdialog');
+  confirmCard.appendChild(el('p', 'menu-confirm-text', 'Quit Tetris?'));
+  const confirmActions = el('div', 'menu-confirm-actions');
+
+  const cancelBtn = el('button', 'set-btn', 'Cancel');
+  cancelBtn.type = 'button';
+  cancelBtn.addEventListener('click', () => cancelConfirm());
+
+  const quitBtn = el('button', 'set-btn set-btn-primary', 'Quit');
+  quitBtn.type = 'button';
+  quitBtn.addEventListener('click', () => confirmQuit());
+
+  confirmActions.appendChild(cancelBtn);
+  confirmActions.appendChild(quitBtn);
+  confirmCard.appendChild(confirmActions);
 
   root.appendChild(title);
   root.appendChild(list);
   root.appendChild(table);
   root.appendChild(hint);
+  root.appendChild(confirmCard);
+
+  function setConfirm(next) {
+    confirming = next;
+    confirmCard.classList.toggle('menu-confirm-on', confirming);
+  }
+
+  function openConfirm() {
+    setConfirm(true);
+  }
+
+  function cancelConfirm() {
+    setConfirm(false);
+  }
+
+  /**
+   * Quit, if the driver wired it up.
+   *
+   * Not `window.close()`: the page cannot close its own window in this webview,
+   * and quitting is the launcher's job — `main.js` routes this to the `quit`
+   * bridge method, which is what actually exits the app.
+   */
+  function confirmQuit() {
+    setConfirm(false);
+    if (handlers.onQuit) handlers.onQuit();
+  }
 
   /** Build the rows from `items`. Only called when the rows themselves change. */
   function buildRows() {
@@ -106,10 +156,14 @@ export function makeMenu(root, handlers) {
   function setOpen(next) {
     open = next;
     root.classList.toggle('menu-open', open);
+    // Never leave the prompt up behind a closed menu: it would reappear over the
+    // game the next time the menu opened.
+    if (!open) setConfirm(false);
   }
 
   return {
     open() {
+      setConfirm(false);
       setOpen(true);
       highlight();
     },
@@ -119,6 +173,15 @@ export function makeMenu(root, handlers) {
     isOpen() {
       return open;
     },
+
+    /** Whether the quit confirmation is up. The driver routes keys by this. */
+    isConfirming() {
+      return confirming;
+    },
+
+    /** Answer the confirmation. Called by the card's buttons and the driver. */
+    confirmQuit,
+    cancelConfirm,
 
     /**
      * New rows and a fresh score table.
@@ -136,10 +199,19 @@ export function makeMenu(root, handlers) {
 
     /** One menu action, from `menuModel.keyToAction`. True when it was ours. */
     act(action) {
+      // While the prompt is up the rows are inert: Enter confirms, Escape
+      // cancels, and the arrows do nothing behind it.
+      if (confirming) {
+        if (action === 'start') { confirmQuit(); return true; }
+        if (action === 'close') { cancelConfirm(); return true; }
+        return false;
+      }
       if (action === 'up') { index = moveSelection(index, -1, items.length); highlight(); return true; }
       if (action === 'down') { index = moveSelection(index, 1, items.length); highlight(); return true; }
       if (action === 'start') { choose(index); return true; }
-      if (action === 'close') { if (handlers.onClose) handlers.onClose(); return true; }
+      // Escape no longer plays the stored mode: it asks before quitting. Enter on
+      // a row and the 1–3 keys still start a game, so nothing was lost.
+      if (action === 'close') { openConfirm(); return true; }
       return false;
     },
 

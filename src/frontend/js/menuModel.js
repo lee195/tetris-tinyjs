@@ -137,6 +137,26 @@ export function keyToAction(code) {
   return KEYS[code] || null;
 }
 
+/**
+ * A key code to an answer in the quit confirmation, or null.
+ *
+ * Separate from `keyToAction` because the confirm is a different mode with its
+ * own keys, and folding them in would make `Escape` mean two things at once.
+ * `Enter`/`Y` quit and `Escape`/`N` cancel — the letters are aliases so the
+ * prompt works without moving a hand to the arrows.
+ */
+const CONFIRM_KEYS = {
+  Enter: 'yes',
+  NumpadEnter: 'yes',
+  KeyY: 'yes',
+  Escape: 'no',
+  KeyN: 'no',
+};
+
+export function confirmKey(code) {
+  return CONFIRM_KEYS[code] || null;
+}
+
 /** The row a selection index points at, or null. */
 export function itemAt(items, index) {
   if (!Array.isArray(items) || index < 0 || index >= items.length) return null;

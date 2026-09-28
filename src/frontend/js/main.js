@@ -45,7 +45,7 @@ import { renderAll } from './sfxgen.js';
 import { pick, makeSfx, makeSfxState, resetSfxState } from './sfx.js';
 import { makeMenu } from './menu.js';
 import { makeHud } from './hud.js';
-import { buildItems, keyToAction } from './menuModel.js';
+import { buildItems, keyToAction, confirmKey } from './menuModel.js';
 
 /** How long a "TETRIS" / "T-SPIN DOUBLE" callout stays on screen, in ticks. */
 const BANNER_TICKS = 66;
@@ -133,7 +133,8 @@ const panel = makePanel(document.getElementById('settings'), {
 const menu = makeMenu(document.getElementById('menu'), {
   onPlay: (modeId) => startMode(modeId),
   onSettings: () => { resetInput(input); panel.open(); },
-  onClose: () => startMode(settings.mode),
+  // Escape on the title screen asks before quitting, and this is the answer.
+  onQuit: () => { call('quit'); },
 });
 
 /**
@@ -574,6 +575,16 @@ window.addEventListener('keydown', (e) => {
   // and persist the mode the title screen is displaying, and `P` would draw the
   // perf overlay across the menu.
   if (menu.isOpen()) {
+    // While the quit confirmation is up it owns every key: Enter/Y quit,
+    // Escape/N cancel, and O and the mode digits are swallowed so nothing fires
+    // behind the prompt. `menu.act` handles the confirm actions; the answer keys
+    // are read here because they are not menu-navigation keys.
+    if (menu.isConfirming()) {
+      const answer = confirmKey(e.code);
+      if (answer === 'yes') { menu.confirmQuit(); return; }
+      if (answer === 'no') { menu.cancelConfirm(); return; }
+      return;
+    }
     const action = keyToAction(e.code);
     if (action) { menu.act(action); return; }
     // Settings and the number keys still work from the title screen; everything

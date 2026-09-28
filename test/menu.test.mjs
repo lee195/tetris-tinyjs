@@ -15,7 +15,7 @@
 
 import {
   buildItems, goalText, bestFor, scoreRows, moveSelection, keyToAction,
-  itemAt, modeAt, ITEM, SCORE_ROWS,
+  confirmKey, itemAt, modeAt, ITEM, SCORE_ROWS,
 } from '../src/frontend/js/menuModel.js';
 import { MODES, MODE_LIST, formatTicks, formatDuration } from '../src/frontend/js/modes.js';
 import { ok, eq, group, done } from './harness.mjs';
@@ -173,6 +173,27 @@ group('the keys');
   eq(keyToAction('KeyP'), null, 'and the perf overlay');
   eq(keyToAction('KeyQ'), null, 'and anything unmapped');
   eq(keyToAction(''), null, 'and an empty code');
+}
+
+/* ----------------------------------------------------------- confirm keys */
+
+group('the confirm keys');
+
+{
+  // The quit prompt's answers. Enter/Y quit and Escape/N cancel, so the prompt
+  // works without moving a hand to the arrows.
+  eq(confirmKey('Enter'), 'yes', 'enter confirms');
+  eq(confirmKey('NumpadEnter'), 'yes', 'and so does the keypad enter');
+  eq(confirmKey('KeyY'), 'yes', 'and Y for yes');
+  eq(confirmKey('Escape'), 'no', 'escape cancels');
+  eq(confirmKey('KeyN'), 'no', 'and N for no');
+
+  // Everything else must be null, or the driver would swallow a key it should
+  // have handled — the mode digits among them.
+  eq(confirmKey('KeyO'), null, 'O is not an answer');
+  eq(confirmKey('Digit1'), null, 'and neither are the mode digits');
+  eq(confirmKey('ArrowUp'), null, 'nor the arrows');
+  eq(confirmKey(''), null, 'and an empty code is not an answer');
 }
 
 /* ------------------------------------------------------------- row lookups */
