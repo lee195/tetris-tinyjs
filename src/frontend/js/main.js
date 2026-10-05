@@ -82,7 +82,9 @@ const lockFlashView = { piece: -1, rot: 0, x: 0, y: 0, alpha: 0 };
 /** The live run. */
 let game;
 /**
- * Which screen is up: `'title'` or `'playing'`.
+ * Which screen is up: `'title'`, `'playing'`, or `'replay'` — a replay started
+ * from the title screen, which Escape returns to the title rather than to the
+ * placeholder game behind it.
  *
  * A driver-owned screen rather than a question asked of the overlays. Asking
  * `menu.isOpen()` looks equivalent and is not: the settings panel can be opened
@@ -148,6 +150,8 @@ const panel = makePanel(document.getElementById('settings'), {
 const menu = makeMenu(document.getElementById('menu'), {
   onPlay: (modeId) => startMode(modeId),
   onSettings: () => { resetInput(input); panel.open(); },
+  onReplays: async () => { menu.showReplays((await call('listReplays')) || []); },
+  onWatch: (id) => { watchFromTitle(id); },
   // Escape on the title screen asks before quitting, and this is the answer.
   onQuit: () => { call('quit'); },
 });
@@ -344,6 +348,9 @@ function newGame(seed, nextMode) {
   startCountdown(countdown, COUNTDOWN_SECONDS);
   recorder = makeRecorder();
   runRecorded = false;
+  // R during a replay from the title screen starts a real run, and a real run
+  // must show its Restart button and leave Escape meaning "title".
+  if (screen === 'replay') screen = 'playing';
   watch = null;
   ghost = null;
   seenClear = null;
@@ -418,6 +425,29 @@ function watchReplay(replay) {
   // A replay is not a fresh run, so a countdown left over from the live game
   // must not sit in front of it.
   startCountdown(countdown, 0);
+}
+
+/**
+ * Watch a saved replay chosen on the title screen.
+ *
+ * The menu has to close and the screen leave `'title'`, because `isPaused` holds
+ * the clock while the title is up — a replay started behind it would never tick.
+ */
+async function watchFromTitle(id) {
+  const replay = await call('loadReplay', { id });
+  if (!replay) {
+    report('replay: could not load ' + id);
+    return;
+  }
+  screen = 'replay';
+  menu.close();
+  watchReplay(replay);
+}
+
+/** Leave a replay. One started from the title screen goes back to it. */
+function stopWatching() {
+  watch = null;
+  if (screen === 'replay') showTitle();
 }
 
 /** Watch the best replay saved on disk, which exercises the storage round trip. */
@@ -669,12 +699,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Escape') {
     // Leaving a replay takes precedence: Escape is how playback is stopped, and
     // that is what you mean before you mean "back to the title screen".
-    if (watch) { watch = null; return; }
+    if (watch) { stopWatching(); return; }
     showTitle();
     return;
   }
   if (e.code === 'KeyV') {
-    if (watch) watch = null;
+    if (watch) stopWatching();
     else watchReplay(lastReplay);
     return;
   }

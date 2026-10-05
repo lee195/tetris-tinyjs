@@ -170,7 +170,17 @@ canvas#game {
   flex-direction: column;
   gap: 6px;
   width: min(420px, calc(100vw - 32px));
+  /* The replay picker can hold a hundred rows; scroll rather than push the score
+     table and hint off screen. Six rows of the main menu fit without a bar. */
+  max-height: 300px;
+  overflow-y: auto;
 }
+
+/* The picker's row count depends on the filter, from none to a hundred. A fixed
+   height rather than the max keeps the title and filter tabs still when it
+   changes. Not on the main view: its rows never change, and 300px there would
+   only open a gap above the score table. */
+.menu-list-replays { height: 300px; }
 
 /* Flex rather than a grid: a mode row carries a label, a goal and sometimes a
    best, while the Settings row carries only a label — a fixed column count would
@@ -202,6 +212,35 @@ canvas#game {
 
 .menu-item-best { color: #8ce9a8; font-size: 12px; }
 
+.menu-item-date { color: #6c7686; font-size: 12px; }
+
+/* The replay picker's mode filter. Shown by class, like every overlay here, and
+   only while the picker is up. */
+.menu-filters {
+  display: none;
+  gap: 6px;
+  width: min(420px, calc(100vw - 32px));
+  margin-bottom: 10px;
+}
+
+.menu-filters-on { display: flex; }
+
+.menu-filter {
+  padding: 4px 10px;
+  background: #141821;
+  color: #6c7686;
+  border: 1px solid #232a35;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.menu-filter-on {
+  color: #dde3ec;
+  border-color: #3ec6e0;
+}
+
 .menu-item-blurb {
   margin-left: auto;
   color: #6c7686;
@@ -210,9 +249,11 @@ canvas#game {
 
 .menu-scores {
   width: min(420px, calc(100vw - 32px));
-  /* Reserved even when empty, so switching the highlight between a mode and
-     Settings does not shift the whole screen. */
-  min-height: 92px;
+  /* Exactly SCORE_ROWS (js/menuModel.js) rows of `.menu-score`, 22px each, and a
+     height rather than a minimum: a full table, an empty one and the Settings line
+     must all take the same box, or moving the highlight shifts the whole screen.
+     Change this with SCORE_ROWS. */
+  height: 110px;
   margin-top: 16px;
 }
 

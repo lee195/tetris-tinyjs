@@ -15,7 +15,8 @@
 
 import {
   buildItems, goalText, bestFor, scoreRows, moveSelection, keyToAction,
-  confirmKey, itemAt, modeAt, ITEM, SCORE_ROWS,
+  confirmKey, itemAt, modeAt, replayRows, formatWhen, replayFilters, filterReplays,
+  ALL_MODES, ITEM, SCORE_ROWS,
 } from '../src/frontend/js/menuModel.js';
 import { MODES, MODE_LIST, formatTicks, formatDuration } from '../src/frontend/js/modes.js';
 import { ok, eq, group, done } from './harness.mjs';
@@ -26,8 +27,9 @@ group('the rows');
 
 {
   const items = buildItems();
-  eq(items.length, MODE_LIST.length + 1, 'one row per mode, plus Settings');
+  eq(items.length, MODE_LIST.length + 2, 'one row per mode, plus Replays and Settings');
   eq(items[items.length - 1].kind, ITEM.SETTINGS, 'Settings is last');
+  eq(items[items.length - 2].kind, ITEM.REPLAYS, 'Replays sits just above it');
 
   // The guard that matters: a mode added to modes.js must appear here without
   // anyone remembering to edit this file. Iterating MODE_LIST is what makes that
@@ -164,6 +166,10 @@ group('the keys');
   // Physical keys, matching input.js — so W/S work on a Dvorak layout too.
   eq(keyToAction('KeyW'), 'up', 'W is an alias for up');
   eq(keyToAction('KeyS'), 'down', 'and S for down');
+  eq(keyToAction('ArrowLeft'), 'left', 'left is left, for the replay filter');
+  eq(keyToAction('ArrowRight'), 'right', 'and right is right');
+  eq(keyToAction('KeyA'), 'left', 'with A and D as aliases, matching input.js');
+  eq(keyToAction('KeyD'), 'right', 'both of them');
 
   // Everything the menu does not own must return null, or the driver would
   // swallow a key it should have handled — `O` and the mode digits among them.
@@ -197,6 +203,62 @@ group('the confirm keys');
 }
 
 /* ------------------------------------------------------------- row lookups */
+
+group('the replay rows');
+
+{
+  // The backend index is sorted best-first; the picker must not inherit that.
+  const list = [
+    { id: 'a', mode: MODE_LIST[0], score: 900, lines: 10, ticks: 600, date: 1000 },
+    { id: 'b', mode: MODE_LIST[0], score: 500, lines: 4, ticks: 300, date: 3000 },
+    { id: 'c', mode: MODE_LIST[0], score: 100, lines: 1, ticks: 60, date: 2000 },
+  ];
+  const rows = replayRows(list);
+  eq(rows.map((r) => r.id).join(','), 'b,c,a', 'newest first, whatever the score order');
+  eq(list[0].id, 'a', 'and the input list is left alone');
+  eq(rows[0].mode, MODES[MODE_LIST[0]].label, 'a row carries the mode label');
+  eq(rows[0].time, formatTicks(300), 'and its run time');
+
+  const tied = replayRows([
+    { id: 'x1', mode: MODE_LIST[0], date: 5 },
+    { id: 'x2', mode: MODE_LIST[0], date: 5 },
+  ]);
+  eq(tied.map((r) => r.id).join(','), 'x2,x1', 'a tie on the date breaks on the id, stably');
+
+  eq(replayRows(null).length, 0, 'a missing list is not a crash');
+  eq(replayRows([]).length, 0, 'an empty list gives no rows');
+  eq(replayRows([null, { score: 1 }]).length, 0, 'entries without an id are skipped');
+  eq(replayRows([{ id: 'z', mode: 'nonesuch', date: 1 }])[0].mode, 'nonesuch',
+    'an unknown mode falls back to its id');
+
+  eq(formatWhen(new Date(2026, 0, 2, 3, 4).getTime()), '2026-01-02 03:04',
+    'a timestamp reads as YYYY-MM-DD HH:MM, zero-padded');
+  eq(formatWhen(undefined), '', 'and a missing one reads as nothing');
+}
+
+group('the replay filters');
+
+{
+  const fs = replayFilters();
+  eq(fs.length, MODE_LIST.length + 1, 'All, then one filter per mode');
+  eq(fs[0].id, ALL_MODES, 'All comes first, so it is the default');
+  let inOrder = true;
+  for (let i = 0; i < MODE_LIST.length; i++) if (fs[i + 1].id !== MODE_LIST[i]) inOrder = false;
+  ok(inOrder, 'the mode filters follow MODE_LIST');
+
+  const other = MODE_LIST[1] || MODE_LIST[0];
+  const rows = replayRows([
+    { id: 'a', mode: MODE_LIST[0], date: 1 },
+    { id: 'b', mode: other, date: 3 },
+    { id: 'c', mode: MODE_LIST[0], date: 2 },
+  ]);
+  eq(filterReplays(rows, ALL_MODES).map((r) => r.id).join(','), 'b,c,a', 'All keeps everything');
+  eq(filterReplays(rows, undefined).length, 3, 'and so does no filter at all');
+  eq(filterReplays(rows, MODE_LIST[0]).map((r) => r.id).join(','), 'c,a',
+    'a mode filter keeps only that mode, still newest first');
+  eq(filterReplays(rows, 'nonesuch').length, 0, 'an unknown filter keeps nothing');
+  eq(filterReplays(null, ALL_MODES).length, 0, 'a missing list is not a crash');
+}
 
 group('looking a row up');
 

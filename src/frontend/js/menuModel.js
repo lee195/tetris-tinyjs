@@ -10,13 +10,13 @@
 import { MODES, MODE_LIST, formatTicks, formatDuration } from './modes.js';
 
 /** What a row does when it is chosen. */
-export const ITEM = { MODE: 'mode', SETTINGS: 'settings' };
+export const ITEM = { MODE: 'mode', REPLAYS: 'replays', SETTINGS: 'settings' };
 
 /** How many score rows the title screen shows before it stops. */
 export const SCORE_ROWS = 5;
 
 /**
- * The rows, in display order: one per mode, then Settings.
+ * The rows, in display order: one per mode, then Replays, then Settings.
  *
  * Built from `MODE_LIST` rather than hardcoded, so adding a mode to `modes.js`
  * puts it on the title screen without touching this file — the same reason the
@@ -34,6 +34,13 @@ export function buildItems() {
       goal: goalText(mode),
     });
   }
+  out.push({
+    kind: ITEM.REPLAYS,
+    id: ITEM.REPLAYS,
+    label: 'Replays',
+    blurb: 'watch a saved run',
+    goal: '',
+  });
   out.push({
     kind: ITEM.SETTINGS,
     id: ITEM.SETTINGS,
@@ -105,6 +112,64 @@ export function scoreRows(scoreTable, modeId, limit) {
 }
 
 /**
+ * A timestamp as `YYYY-MM-DD HH:MM`, local time.
+ *
+ * Built from the `Date` getters rather than `toLocaleString`, so the picker reads
+ * the same on every machine and the test does not depend on the system locale.
+ */
+export function formatWhen(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+    ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+/**
+ * The replay picker's rows, newest first.
+ *
+ * The backend keeps its index sorted best-score-first, because that is what it
+ * prunes by — so the order here has to be imposed, not inherited. Ties on the
+ * date fall back to the id so the order is stable between two fetches.
+ */
+export function replayRows(list) {
+  if (!Array.isArray(list)) return [];
+  const rows = list.filter((e) => e && typeof e.id === 'string');
+  rows.sort((a, b) => ((b.date || 0) - (a.date || 0)) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+  return rows.map((e) => ({
+    id: e.id,
+    modeId: String(e.mode || ''),
+    when: formatWhen(e.date),
+    mode: MODES[e.mode] ? MODES[e.mode].label : String(e.mode || ''),
+    score: e.score || 0,
+    lines: e.lines || 0,
+    time: formatTicks(e.ticks || 0),
+    reason: e.reason || '',
+  }));
+}
+
+/** The filter that shows every replay. Also the picker's default. */
+export const ALL_MODES = 'all';
+
+/**
+ * The picker's mode filters, in the order left/right steps through them: All,
+ * then one per mode. From `MODE_LIST`, like `buildItems`, so a new mode gets a
+ * filter without anyone editing this.
+ */
+export function replayFilters() {
+  const out = [{ id: ALL_MODES, label: 'All' }];
+  for (const id of MODE_LIST) out.push({ id, label: MODES[id].label });
+  return out;
+}
+
+/** The replay rows one filter keeps, in the order they came in. */
+export function filterReplays(rows, filterId) {
+  if (!Array.isArray(rows)) return [];
+  if (!filterId || filterId === ALL_MODES) return rows.slice();
+  return rows.filter((r) => r && r.modeId === filterId);
+}
+
+/**
  * Move a selection index by `delta`, wrapping at both ends.
  *
  * Wrapping rather than clamping, because a four-row menu that stops dead at the
@@ -127,6 +192,10 @@ const KEYS = {
   ArrowDown: 'down',
   KeyW: 'up',
   KeyS: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  KeyA: 'left',
+  KeyD: 'right',
   Enter: 'start',
   NumpadEnter: 'start',
   Space: 'start',
@@ -163,7 +232,7 @@ export function itemAt(items, index) {
   return items[index];
 }
 
-/** The mode id a selection points at, or null when it points at Settings. */
+/** The mode id a selection points at, or null when it points at a non-mode row. */
 export function modeAt(items, index) {
   const item = itemAt(items, index);
   return item && item.kind === ITEM.MODE ? item.id : null;
